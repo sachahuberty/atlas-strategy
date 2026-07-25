@@ -14,10 +14,20 @@ Stage 6: a technical (V3) tilt wrapper, plus a separate
 `phase_flags_fn` builder for backtest.run's execution-timing hook
 (S12) -- not a strategy_fn wrapper itself, since phasing needs the
 backtester's own current-vs-target trade, not just a weight vector.
-All strategy_fn stages build on the same contract --
-a `backtest.run`-compatible `strategy_fn(as_of, window) -> pd.Series`
--- so later stages (sentiment, Black-Litterman) can keep layering in
-without changing it.
+
+Stage 7: a sentiment (V4) tilt wrapper (S14). Unlike every other
+wrapper here, it takes a fixed `bucket_scores` snapshot rather than
+recomputing from `window` -- free news sources have no historical
+archive (same limitation as stage 6's options positioning), so
+sentiment is LIVE-ONLY: meant for a forward/live loop that re-scrapes
+and passes in a fresh snapshot each real week, never for the
+historical OOS backtest (applying one fixed live snapshot across
+history would be a lookahead violation).
+
+All strategy_fn stages build on the same contract -- a
+`backtest.run`-compatible `strategy_fn(as_of, window) -> pd.Series` --
+so later stages (Black-Litterman) can keep layering in without
+changing it.
 
 Public API (stage 3):
     regime_switching_strategy(class_bucket, cfg, posture_cfg,
@@ -32,6 +42,10 @@ Public API (stage 5):
 Public API (stage 6):
     with_technical_view(strategy_fn, cfg) -> strategy_fn
     technical_phase_flags(cfg) -> phase_flags_fn
+
+Public API (stage 7):
+    with_sentiment_view(strategy_fn, cfg, class_bucket,
+                         bucket_scores) -> strategy_fn
 """
 
 from __future__ import annotations
@@ -42,7 +56,14 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from . import allocation, anomaly, meanreversion, regimes, technicals
+from . import (
+    allocation,
+    anomaly,
+    meanreversion,
+    regimes,
+    sentiment,
+    technicals,
+)
 
 StrategyFn = Callable[[pd.Timestamp, pd.DataFrame], pd.Series]
 
@@ -275,3 +296,33 @@ def technical_phase_flags(
         return set(diag[diag["role"] == "resistance"].index)
 
     return phase_flags_fn
+
+
+def with_sentiment_view(
+    strategy_fn: StrategyFn,
+    cfg: dict,
+    class_bucket: pd.Series,
+    bucket_scores: pd.Series,
+) -> StrategyFn:
+    """Wrap any strategy_fn with the V4 sentiment tilt (S14, live use
+    only -- see module docstring). `sentiment.sentiment_view` already
+    bounds each asset's tilt to `sentiment.max_view_magnitude` (VADER's
+    compound score is itself in [-1, 1]), so unlike V2/V3 there is no
+    further cross-sectional rescaling here -- the view is already
+    safely bounded by construction.
+    """
+    cap = cfg["constraints"]["per_asset_cap"]
+    view = sentiment.sentiment_view(bucket_scores, class_bucket, cfg)
+
+    def strategy_fn_with_sentiment(
+        as_of: pd.Timestamp, window: pd.DataFrame
+    ) -> pd.Series:
+        base_weights = strategy_fn(as_of, window)
+        aligned_view = view.reindex(base_weights.index).fillna(0.0)
+        if (aligned_view == 0).all():
+            return base_weights
+
+        tilted = (base_weights + aligned_view).clip(lower=0.0)
+        return allocation.cap_and_renormalize(tilted, cap)
+
+    return strategy_fn_with_sentiment

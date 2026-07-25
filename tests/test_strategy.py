@@ -1,6 +1,7 @@
 """Tests for the V1 regime-switching strategy (stage 3), the anomaly
 risk-override wrapper (stage 4), the mean-reversion tilt (stage 5),
-and the technical tilt + phase flags (stage 6).
+the technical tilt + phase flags (stage 6), and the sentiment tilt
+(stage 7).
 """
 
 import numpy as np
@@ -512,3 +513,73 @@ def test_technical_phase_flags_empty_on_degenerate_fit(monkeypatch):
     flags = phase_flags_fn(returns.index[-1], returns)
 
     assert flags == set()
+
+
+# --- stage 7: sentiment (V4) tilt -------------------------------------
+
+SENTIMENT_CFG = {
+    "constraints": {"per_asset_cap": 1.0},
+    "sentiment": {"max_view_magnitude": 0.01},
+}
+
+SENTIMENT_CLASS_BUCKET = pd.Series(
+    {"A": "equity", "B": "fixed_income", "C": "cash"}
+)
+
+
+def test_sentiment_view_passes_through_when_scores_are_empty():
+    empty_scores = pd.Series(dtype=float)
+    wrapped = strategy.with_sentiment_view(
+        _base_fn, SENTIMENT_CFG, SENTIMENT_CLASS_BUCKET, empty_scores
+    )
+    returns = _synthetic_returns()
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_sentiment_view_shifts_weight_by_bucket_score():
+    bucket_scores = pd.Series({"equity": 0.8, "fixed_income": -0.6})
+    wrapped = strategy.with_sentiment_view(
+        _base_fn, SENTIMENT_CFG, SENTIMENT_CLASS_BUCKET, bucket_scores
+    )
+    returns = _synthetic_returns()
+    weights = wrapped(returns.index[-1], returns)
+
+    base = _base_fn(None, None)
+    max_magnitude = SENTIMENT_CFG["sentiment"]["max_view_magnitude"]
+    expected = pd.Series(
+        {
+            "A": base["A"] + 0.8 * max_magnitude,
+            "B": base["B"] - 0.6 * max_magnitude,
+            "C": base["C"],
+        }
+    )
+    expected = expected / expected.sum()
+    pd.testing.assert_series_equal(
+        weights.sort_index(), expected.sort_index()
+    )
+
+
+def test_sentiment_view_respects_cap():
+    # Realistic magnitude (VADER's full +/-1.0 range, but the small
+    # max_view_magnitude sentiment_view is actually configured with,
+    # matching V2/V3's tilt scale) -- a mild, easily-resolvable cap
+    # breach, not the pathological case where an extreme tilt clips an
+    # asset to exactly zero before capping even runs (that starves it
+    # of any room in cap_and_renormalize's pro-rata redistribution,
+    # which is a separate, known limitation, not what this test is
+    # checking).
+    bucket_scores = pd.Series({"equity": 1.0, "fixed_income": -1.0})
+    tight_cfg = {
+        "constraints": {"per_asset_cap": 0.52},
+        "sentiment": {"max_view_magnitude": 0.05},
+    }
+    wrapped = strategy.with_sentiment_view(
+        _base_fn, tight_cfg, SENTIMENT_CLASS_BUCKET, bucket_scores
+    )
+    returns = _synthetic_returns()
+    weights = wrapped(returns.index[-1], returns)
+
+    assert (weights <= 0.52 + 1e-9).all()
+    assert abs(weights.sum() - 1.0) < 1e-6

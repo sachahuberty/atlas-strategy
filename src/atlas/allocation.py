@@ -271,6 +271,17 @@ def cap_and_renormalize(weights: pd.Series, cap: float) -> pd.Series:
     concentrate heavily in a low-variance asset (e.g. a T-bill ETF),
     which would violate the same per-asset cap every other book in
     this module respects.
+
+    Known limitation: redistribution is pro rata to each uncapped
+    asset's CURRENT weight, so an asset already at exactly zero never
+    receives any of the redistributed excess. With few assets and an
+    extreme, artificial excess (confirmed while testing a tilt
+    wrapper: a large enough tilt clipped one asset to zero, then two
+    assets alone couldn't hold the remainder under the cap), this can
+    oscillate rather than converge within `len(weights)` iterations.
+    Not an issue at the realistic scale this module is actually used
+    at (~20 assets, modest tilts), but a real edge case if a caller
+    ever passes something more extreme.
     """
     w = weights.astype(float).copy()
     for _ in range(len(w)):

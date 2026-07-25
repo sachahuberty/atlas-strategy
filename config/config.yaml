@@ -98,9 +98,15 @@ technicals:
   gamma_proxy_enabled: true        # live only
 
 sentiment:
-  sources: []                      # scraper targets, filled in stage 7
+  sources:                          # RSS feeds (S14); robots.txt is also
+    - "https://finance.yahoo.com/news/rssindex"  # checked at request time,
+    - "https://www.forbes.com/business/feed/"    # not just pre-vetted here
   lag_days: 1
   score_aggregation: weekly_mean
+  max_view_magnitude: 0.01          # small confidence: slow, noisy signal
+  n_topics: 3                       # LDA topics for the report
+  request_timeout_seconds: 10
+  user_agent: "ATLAS-research-bot/0.1 (+https://github.com/sachahuberty/atlas-strategy)"
 
 black_litterman:
   tau: 0.05
