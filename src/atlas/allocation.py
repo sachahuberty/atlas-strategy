@@ -1,8 +1,11 @@
 """Optimizers (L3): classical books now, Black-Litterman fusion later.
 
-Stage 2 (this file): max_sharpe, gmv, risk_parity, hrp,
-tracking_error_min, efficient_frontier, permanent, sixty_forty,
-utility_select, plus the mean/covariance helpers they share.
+Stage 2: max_sharpe, gmv, risk_parity, hrp, tracking_error_min,
+efficient_frontier, permanent, sixty_forty, utility_select, plus the
+mean/covariance helpers they share.
+
+Stage 3 addition: apply_defensive_tilt, for the regime-conditional
+risk-off tilt wired in strategy.py (S7).
 
 Stage 8 (not yet implemented): equilibrium_returns, black_litterman.
 Those need the view machinery from views.py and are out of scope
@@ -23,6 +26,9 @@ Public API (stage 2):
     efficient_frontier(mu, cov, cfg) -> pd.DataFrame     # S2/S3
     permanent(class_bucket) / sixty_forty(class_bucket) -> weights
     utility_select(candidates, mu, cov, risk_aversion) -> (name, weights)
+
+Public API (stage 3):
+    apply_defensive_tilt(weights, class_bucket, tilt, cfg) -> weights
 """
 
 from __future__ import annotations
@@ -353,3 +359,34 @@ def utility_select(
         if u > best_utility:
             best_name, best_utility, best_weights = name, u, w
     return best_name, best_weights
+
+
+def apply_defensive_tilt(
+    weights: pd.Series,
+    class_bucket: pd.Series,
+    tilt: dict[str, float],
+    cfg: dict,
+) -> pd.Series:
+    """Add an additive risk-off tilt to specific asset-class buckets
+    (e.g. + fixed_income, + commodity), funded pro rata out of every
+    other bucket, then re-apply the per-asset cap (S7 regime-
+    conditional caps)."""
+    w = weights.reindex(class_bucket.index).fillna(0.0).astype(float)
+    total_tilt = sum(tilt.values())
+
+    for bucket, add in tilt.items():
+        members = class_bucket[class_bucket == bucket].index
+        if len(members) == 0:
+            raise ValueError(f"No tickers found for bucket '{bucket}'")
+        current = w[members].sum()
+        if current > 1e-12:
+            w[members] += add * (w[members] / current)
+        else:
+            w[members] += add / len(members)
+
+    other_members = class_bucket[~class_bucket.isin(tilt.keys())].index
+    other_total = w[other_members].sum()
+    if other_total > 1e-12:
+        w[other_members] -= total_tilt * (w[other_members] / other_total)
+
+    return _apply_cap(w.clip(lower=0.0), cfg["constraints"]["per_asset_cap"])

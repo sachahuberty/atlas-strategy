@@ -15,7 +15,7 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 
 - [x] Stage 1 — scaffold, data layer, universe screener, metrics
 - [x] Stage 2 — classical allocations + weekly backtester (baseline)
-- [ ] Stage 3 — regime detection (HMM primary) + posture switching
+- [x] Stage 3 — regime detection (HMM primary) + posture switching
 - [ ] Stage 4 — autoencoder anomaly override
 - [ ] Stage 5 — mean-reversion views
 - [ ] Stage 6 — technical/options views + execution timing

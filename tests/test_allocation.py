@@ -1,10 +1,11 @@
-"""Constraint tests for allocation.py (stage 2)."""
+"""Constraint tests for allocation.py (stages 2-3)."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from atlas.allocation import (
+    apply_defensive_tilt,
     covariance_matrix,
     gmv,
     hrp,
@@ -154,3 +155,33 @@ def test_utility_select_picks_higher_utility_candidate():
     name, weights = utility_select(candidates, mu, cov, risk_aversion=5)
     assert name == "safe"
     pd.testing.assert_series_equal(weights, candidates["safe"])
+
+
+def test_apply_defensive_tilt_shifts_weight_into_target_bucket():
+    class_bucket = pd.Series(
+        {"A": "equity", "B": "equity", "C": "fixed_income"}
+    )
+    weights = pd.Series({"A": 0.5, "B": 0.3, "C": 0.2})
+    cfg = {"constraints": {"per_asset_cap": 1.0}}
+
+    tilted = apply_defensive_tilt(
+        weights, class_bucket, {"fixed_income": 0.10}, cfg
+    )
+
+    assert tilted.sum() == pytest.approx(1.0)
+    assert tilted["C"] == pytest.approx(0.30, abs=1e-6)
+    # Funded pro rata out of equity: the A:B ratio must be preserved.
+    assert tilted["A"] / tilted["B"] == pytest.approx(0.5 / 0.3)
+
+
+def test_apply_defensive_tilt_respects_cap():
+    class_bucket = pd.Series({"A": "equity", "B": "fixed_income"})
+    weights = pd.Series({"A": 0.85, "B": 0.15})
+    cfg = {"constraints": {"per_asset_cap": 0.6}}
+
+    tilted = apply_defensive_tilt(
+        weights, class_bucket, {"fixed_income": 0.30}, cfg
+    )
+
+    assert tilted.sum() == pytest.approx(1.0)
+    assert (tilted <= 0.6 + 1e-6).all()

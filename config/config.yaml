@@ -39,14 +39,19 @@ modules:                           # ablation on/off flags
   execution_timing: true
 
 regimes:
+  market_ticker: ACWI               # broad-market proxy the HMM is fit on
   hmm:
     n_states: 3
     features: [returns, rolling_vol]
+    vol_window_days: 21             # ~1 trading month, for rolling_vol
+    lookback_days: 1260             # ~5Y training window, ~a few regime cycles
     refit: weekly                  # cheap; decode-only also allowed
   kmeans_macro:
     k: 4
     refit: fold                    # per walk-forward fold
     fred_series: [UNRATE, CPIAUCSL, INDPRO, T10Y2Y, FEDFUNDS, UMCSENT]
+    growth_indicator: INDPRO
+    inflation_indicator: CPIAUCSL
 
 anomaly:
   sequence_length: 5

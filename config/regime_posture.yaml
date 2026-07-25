@@ -6,13 +6,22 @@
 postures:
   risk_on:
     profile: { vol: low, mean_return: high }
-    allocation_method: max_sharpe_bl        # BL posterior, fully invested
+    # Stage 8 will swap this for the true BL posterior (max_sharpe_bl);
+    # until then this is a naive proxy on plain historical mu/cov, per
+    # PROJECT_STRUCTURE.md 5.1: "until here, views can combine naively".
+    allocation_method: max_sharpe
   neutral:
     profile: { vol: medium, mean_return: medium }
     allocation_method: risk_parity
   risk_off:
     profile: { vol: high, mean_return: low }
     allocation_method: gmv_defensive        # GMV tilted to defensive classes
-    defensive_class_tilt:
-      short_bonds: 0.10                     # additive tilt caps, applied in risk.py
-      gold: 0.10
+    defensive_class_tilt:                   # additive tilt, applied in
+      fixed_income: 0.10                    # allocation.apply_defensive_tilt;
+      commodity: 0.10                       # keyed to universe.py's actual
+                                             # class buckets (equity,
+                                             # fixed_income, commodity,
+                                             # real_estate, cash) rather than
+                                             # sub-labels ("short_bonds",
+                                             # "gold") the screener doesn't
+                                             # produce.
