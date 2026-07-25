@@ -1,7 +1,156 @@
 """Constraint tests for allocation.py (stage 2)."""
 
-# TODO stage 2:
-# - every optimizer: weights >= 0, sum == 1, respects per-asset cap
-# - gmv variance <= equal-weight variance on same data
-# - risk_parity: risk contributions approximately equal
-# - black_litterman (stage 8): no views -> posterior == prior
+import numpy as np
+import pandas as pd
+import pytest
+
+from atlas.allocation import (
+    covariance_matrix,
+    gmv,
+    hrp,
+    max_sharpe,
+    mean_returns,
+    permanent,
+    risk_parity,
+    sixty_forty,
+    tracking_error_min,
+    utility_select,
+)
+
+CFG = {"constraints": {"per_asset_cap": 0.6}}
+
+
+@pytest.fixture
+def synthetic_returns():
+    rng = np.random.default_rng(42)
+    tickers = ["A", "B", "C", "D"]
+    data = rng.normal(0.0004, 0.01, size=(500, 4))
+    return pd.DataFrame(data, columns=tickers)
+
+
+def _assert_valid_weights(w: pd.Series, cap: float = 0.6):
+    assert w.sum() == pytest.approx(1.0, abs=1e-6)
+    assert (w >= -1e-9).all()
+    assert (w <= cap + 1e-6).all()
+
+
+def test_max_sharpe_respects_constraints(synthetic_returns):
+    mu = mean_returns(synthetic_returns)
+    cov = covariance_matrix(synthetic_returns)
+    _assert_valid_weights(max_sharpe(mu, cov, CFG))
+
+
+def test_gmv_respects_constraints(synthetic_returns):
+    cov = covariance_matrix(synthetic_returns)
+    _assert_valid_weights(gmv(cov, CFG))
+
+
+def test_gmv_variance_beats_equal_weight(synthetic_returns):
+    cov = covariance_matrix(synthetic_returns)
+    n = len(cov)
+    equal_weight = pd.Series(1.0 / n, index=cov.index)
+    equal_var = equal_weight @ cov.values @ equal_weight
+
+    w = gmv(cov, CFG)
+    gmv_var = w.to_numpy() @ cov.to_numpy() @ w.to_numpy()
+
+    assert gmv_var <= equal_var + 1e-9
+
+
+def test_risk_parity_respects_constraints(synthetic_returns):
+    cov = covariance_matrix(synthetic_returns)
+    _assert_valid_weights(risk_parity(cov, CFG))
+
+
+def test_risk_parity_contributions_are_approximately_equal(synthetic_returns):
+    cov = covariance_matrix(synthetic_returns)
+    w = risk_parity(cov, CFG)
+    risk_contrib = w.to_numpy() * (cov.to_numpy() @ w.to_numpy())
+    assert risk_contrib.std() < 1e-3
+
+
+def test_hrp_respects_constraints(synthetic_returns):
+    _assert_valid_weights(hrp(synthetic_returns, CFG))
+
+
+def test_hrp_equal_weight_for_iid_equal_variance_assets():
+    # Uncorrelated assets with identical variance: HRP should reduce
+    # to (approximately) equal weight, since no cluster dominates.
+    rng = np.random.default_rng(42)
+    tickers = ["A", "B", "C", "D"]
+    data = rng.normal(0.0, 0.01, size=(1000, 4))
+    returns = pd.DataFrame(data, columns=tickers)
+    w = hrp(returns, CFG)
+    assert w.to_numpy() == pytest.approx([0.25] * 4, abs=0.05)
+
+
+def test_hrp_caps_a_dominant_low_variance_asset():
+    # One near-riskless asset (tiny variance) should get capped, not
+    # allowed to swallow the whole portfolio (the BIL/T-bill failure
+    # mode vanilla HRP is prone to).
+    rng = np.random.default_rng(5)
+    tickers = ["RISKY_A", "RISKY_B", "RISKY_C", "CASH_LIKE"]
+    data = np.column_stack([
+        rng.normal(0.0, 0.015, 500),
+        rng.normal(0.0, 0.016, 500),
+        rng.normal(0.0, 0.017, 500),
+        rng.normal(0.0, 0.0002, 500),
+    ])
+    returns = pd.DataFrame(data, columns=tickers)
+    w = hrp(returns, CFG)
+    _assert_valid_weights(w)
+    assert w["CASH_LIKE"] <= CFG["constraints"]["per_asset_cap"] + 1e-6
+
+
+def test_tracking_error_min_recovers_feasible_benchmark(synthetic_returns):
+    cov = covariance_matrix(synthetic_returns)
+    benchmark = pd.Series(0.25, index=cov.index)
+    w = tracking_error_min(cov, benchmark, CFG)
+    pd.testing.assert_series_equal(w, benchmark, check_exact=False, atol=1e-4)
+
+
+def test_permanent_splits_25_each():
+    class_bucket = pd.Series(
+        {
+            "SPY": "equity",
+            "AGG": "fixed_income",
+            "GLD": "commodity",
+            "BIL": "cash",
+        }
+    )
+    w = permanent(class_bucket)
+    assert w.sum() == pytest.approx(1.0)
+    assert w.to_numpy() == pytest.approx([0.25, 0.25, 0.25, 0.25])
+
+
+def test_permanent_splits_equally_within_bucket():
+    class_bucket = pd.Series(
+        {"SPY": "equity", "QQQ": "equity", "AGG": "fixed_income",
+         "GLD": "commodity", "BIL": "cash"}
+    )
+    w = permanent(class_bucket)
+    assert w["SPY"] == pytest.approx(0.125)
+    assert w["QQQ"] == pytest.approx(0.125)
+    assert w["AGG"] == pytest.approx(0.25)
+
+
+def test_sixty_forty_split():
+    class_bucket = pd.Series({"SPY": "equity", "AGG": "fixed_income"})
+    w = sixty_forty(class_bucket)
+    assert w["SPY"] == pytest.approx(0.6)
+    assert w["AGG"] == pytest.approx(0.4)
+
+
+def test_utility_select_picks_higher_utility_candidate():
+    mu = pd.Series({"A": 0.10, "B": 0.10})
+    cov = pd.DataFrame(
+        {"A": [0.04, 0.0], "B": [0.0, 0.01]}, index=["A", "B"]
+    )
+    candidates = {
+        "risky": pd.Series({"A": 1.0, "B": 0.0}),
+        "safe": pd.Series({"A": 0.0, "B": 1.0}),
+    }
+    # Same expected return, lower vol -> "safe" must win on utility.
+    name, weights = utility_select(candidates, mu, cov, risk_aversion=5)
+    assert name == "safe"
+    pd.testing.assert_series_equal(weights, candidates["safe"])

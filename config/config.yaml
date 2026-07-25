@@ -85,6 +85,7 @@ optimization:
   objective: max_sharpe            # on BL posterior returns
   covariance: ledoit_wolf          # shrunk covariance
   risk_aversion_levels: [2, 5, 10] # utility comparison (S1/S3)
+  lookback_days: 756               # trailing window for mu/cov, ~3Y (S6 convention)
 
 backtest:
   walk_forward_fold: quarterly
