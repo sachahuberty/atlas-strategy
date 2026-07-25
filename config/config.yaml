@@ -56,8 +56,16 @@ regimes:
 anomaly:
   sequence_length: 5
   latent_dim: 2
+  hidden_units: 8                  # LSTM encoder/decoder width
   threshold_percentile: 99
-  refit: fold
+  validation_fraction: 0.2         # chronological split, tail = validation
+  epochs: 50
+  patience: 5                      # early-stopping patience on val_loss
+  batch_size: 32
+  refit: fold                      # per walk-forward fold (formalized stage 9)
+  refit_frequency_days: 63         # ~1 quarter; stage-4 stand-in for the
+                                    # real fold schedule, to keep the OOS
+                                    # backtest demo tractable before stage 9
   blend_to_gmv: 1.0                # 1.0 = fully defensive when flagged
 
 meanreversion:

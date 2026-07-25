@@ -1,9 +1,10 @@
-"""Tests for the V1 regime-switching strategy wiring (stage 3)."""
+"""Tests for the V1 regime-switching strategy (stage 3) and the
+anomaly risk-override wrapper (stage 4)."""
 
 import numpy as np
 import pandas as pd
 
-from atlas import allocation, regimes, strategy
+from atlas import allocation, anomaly, regimes, strategy
 
 POSTURE_CFG = {
     "postures": {
@@ -129,3 +130,134 @@ def test_risk_off_posture_tilts_toward_defensive_buckets():
     # relative to an un-tilted GMV on the same covariance -- unless GMV
     # itself was already selected verbatim (no tilt to observe).
     assert defensive_mass >= plain_defensive_mass - 1e-6
+
+
+# --- stage 4: anomaly risk-override wrapper -------------------------
+
+ANOMALY_CFG = {
+    "optimization": {"lookback_days": 50, "covariance": "ledoit_wolf"},
+    "constraints": {"per_asset_cap": 1.0},
+    "anomaly": {
+        "sequence_length": 5,
+        "refit_frequency_days": 63,
+        "blend_to_gmv": 0.5,
+    },
+}
+
+
+class _DummyAEResult:
+    def __init__(self, seq_len=5, threshold=1.0):
+        self.seq_len = seq_len
+        self.threshold = threshold
+
+
+def _base_fn(as_of, window):
+    return pd.Series({"A": 0.5, "B": 0.3, "C": 0.2})
+
+
+def _synthetic_returns(n=200, seed=5):
+    dates = pd.bdate_range("2020-01-01", periods=n)
+    rng = np.random.default_rng(seed)
+    data = {t: rng.normal(0.0004, 0.01, n) for t in ["A", "B", "C"]}
+    return pd.DataFrame(data, index=dates)
+
+
+def test_anomaly_override_passes_through_when_not_flagged(monkeypatch):
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(
+        anomaly, "fit_autoencoder", lambda *a, **k: _DummyAEResult()
+    )
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_anomaly_override_blends_toward_gmv_when_flagged(monkeypatch):
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(
+        anomaly, "fit_autoencoder", lambda *a, **k: _DummyAEResult()
+    )
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([5.0])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([True])
+    )
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    recent = returns.tail(ANOMALY_CFG["optimization"]["lookback_days"])
+    cov = allocation.covariance_matrix(recent, method="ledoit_wolf")
+    gmv_weights = allocation.gmv(cov, ANOMALY_CFG)
+    base_weights = _base_fn(None, None).reindex(gmv_weights.index).fillna(0.0)
+    expected = 0.5 * base_weights + 0.5 * gmv_weights
+
+    pd.testing.assert_series_equal(
+        weights.sort_index(), expected.sort_index()
+    )
+
+
+def test_anomaly_override_refits_only_after_frequency_elapses(monkeypatch):
+    call_count = {"n": 0}
+
+    def _fake_fit(features, cfg):
+        call_count["n"] += 1
+        return _DummyAEResult()
+
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(anomaly, "fit_autoencoder", _fake_fit)
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+
+    day0 = returns.index[100]
+    day_soon = returns.index[110]  # well within refit_frequency_days=63
+    day_later = day0 + pd.Timedelta(days=100)  # past the refit window
+
+    wrapped(day0, returns)
+    wrapped(day_soon, returns)
+    assert call_count["n"] == 1
+
+    wrapped(day_later, returns)
+    assert call_count["n"] == 2
+
+
+def test_anomaly_override_degenerate_fit_falls_back_to_base(monkeypatch):
+    def _boom(features, cfg):
+        raise ValueError("training diverged")
+
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(anomaly, "fit_autoencoder", _boom)
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_anomaly_override_passes_through_with_too_little_history():
+    # Real (non-monkeypatched) has_enough_history gate: far below the
+    # anomaly module's minimum-observations floor.
+    returns = _synthetic_returns(n=10)
+    wrapped = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
