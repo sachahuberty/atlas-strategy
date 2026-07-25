@@ -26,6 +26,8 @@ Public API (stage 2):
     efficient_frontier(mu, cov, cfg) -> pd.DataFrame     # S2/S3
     permanent(class_bucket) / sixty_forty(class_bucket) -> weights
     utility_select(candidates, mu, cov, risk_aversion) -> (name, weights)
+    cap_and_renormalize(weights, cap) -> weights   # waterfall re-cap, reused
+                                                    # by hrp and every tilt
 
 Public API (stage 3):
     apply_defensive_tilt(weights, class_bucket, tilt, cfg) -> weights
@@ -261,7 +263,7 @@ def _recursive_bisection(
     return weights
 
 
-def _apply_cap(weights: pd.Series, cap: float) -> pd.Series:
+def cap_and_renormalize(weights: pd.Series, cap: float) -> pd.Series:
     """Clip anything above `cap` and redistribute the excess pro rata
     across uncapped assets, iterating to convergence (waterfall cap).
 
@@ -303,7 +305,7 @@ def hrp(returns: pd.DataFrame, cfg: dict) -> pd.Series:
     ordered = [tickers[i] for i in _quasi_diagonalize(link)]
     weights = _recursive_bisection(cov, ordered)
     weights = weights.reindex(returns.columns)
-    return _apply_cap(weights, cap)
+    return cap_and_renormalize(weights, cap)
 
 
 def _bucket_equal_weight(
@@ -389,4 +391,5 @@ def apply_defensive_tilt(
     if other_total > 1e-12:
         w[other_members] -= total_tilt * (w[other_members] / other_total)
 
-    return _apply_cap(w.clip(lower=0.0), cfg["constraints"]["per_asset_cap"])
+    cap = cfg["constraints"]["per_asset_cap"]
+    return cap_and_renormalize(w.clip(lower=0.0), cap)

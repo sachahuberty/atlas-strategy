@@ -71,9 +71,18 @@ anomaly:
 meanreversion:
   lookback_days: 40
   entry_z: 2.0
-  exit_z: 0.5
+  exit_z: 0.5                      # position-level hysteresis; not yet
+                                    # used by the stateless weekly view
+                                    # generator (see meanreversion.py notes)
   max_half_life_days: 60
+  adf_lookback_days: 250           # longer than lookback_days: ADF on the
+                                    # RAW log-price (not rolling-detrended,
+                                    # which induces spurious stationarity)
+                                    # needs more data for real power
+  adf_pvalue_threshold: 0.05        # stationarity gate on the raw log-price
   vol_filter: true
+  vol_filter_percentile: 75         # only trade below this trailing-vol pct
+  max_tilt_pp: 0.05                 # max per-asset weight tilt from V2
 
 technicals:
   pivot_order: 5

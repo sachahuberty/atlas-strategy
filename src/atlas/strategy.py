@@ -6,11 +6,13 @@ which classical allocation book (from allocation.py) to run each
 Friday -- "posture switching," the project's first full strategy
 version.
 
-Stage 4: an anomaly risk override wrapper (L4, S8). Both stages build
-on the same contract -- a `backtest.run`-compatible
+Stage 4: an anomaly risk override wrapper (L4, S8).
+
+Stage 5: a mean-reversion (V2) tilt wrapper (S10). All three stages
+build on the same contract -- a `backtest.run`-compatible
 `strategy_fn(as_of, window) -> pd.Series` -- so later stages
-(mean-reversion, technicals, sentiment, Black-Litterman) can keep
-layering in without changing it.
+(technicals, sentiment, Black-Litterman) can keep layering in without
+changing it.
 
 Public API (stage 3):
     regime_switching_strategy(class_bucket, cfg, posture_cfg,
@@ -18,6 +20,9 @@ Public API (stage 3):
 
 Public API (stage 4):
     with_anomaly_override(strategy_fn, cfg) -> strategy_fn
+
+Public API (stage 5):
+    with_meanreversion_tilt(strategy_fn, cfg) -> strategy_fn
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from . import allocation, anomaly, regimes
+from . import allocation, anomaly, meanreversion, regimes
 
 StrategyFn = Callable[[pd.Timestamp, pd.DataFrame], pd.Series]
 
@@ -149,3 +154,53 @@ def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
         return (1 - blend) * aligned_base + blend * gmv_weights
 
     return strategy_fn_with_override
+
+
+def with_meanreversion_tilt(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
+    """Wrap any strategy_fn with the V2 mean-reversion tilt (S10):
+    nudge weights toward assets with a strong OU-implied expected
+    reversion drift, scaled to a bounded max per-asset tilt (S10).
+
+    Until Black-Litterman (stage 8) properly fuses views into one
+    posterior, this combines naively as an additive tilt on top of
+    whatever book V1 selected (PROJECT_STRUCTURE.md 5.1): the raw view
+    is rescaled to [-1, 1] by its own cross-sectional max magnitude,
+    then multiplied by `meanreversion.max_tilt_pp` before being added
+    to the base weights and re-capped.
+    """
+    mcfg = cfg["meanreversion"]
+    max_tilt = mcfg["max_tilt_pp"]
+    cap = cfg["constraints"]["per_asset_cap"]
+
+    def strategy_fn_with_tilt(
+        as_of: pd.Timestamp, window: pd.DataFrame
+    ) -> pd.Series:
+        base_weights = strategy_fn(as_of, window)
+
+        # Returns are all backtest.run passes strategy_fn; reconstruct
+        # a price-relative series (exact for log-price purposes, since
+        # detrending/z-scoring/OU regression are all invariant to the
+        # arbitrary constant scale factor of a $1 starting level).
+        prices = (1.0 + window).cumprod()
+        if not meanreversion.has_enough_history(prices, cfg):
+            return base_weights
+
+        try:
+            view = meanreversion.mean_reversion_view(prices, cfg)
+        except ValueError:
+            # Same defensive spirit as the HMM/anomaly guards: an
+            # unexpected numerical failure in one week's ADF/OU fit
+            # shouldn't crash the whole backtest.
+            return base_weights
+
+        view = view.reindex(base_weights.index).fillna(0.0)
+        if (view == 0).all():
+            return base_weights
+
+        scale = view.abs().max()
+        tilt = (view / scale) * max_tilt if scale > 1e-12 else view
+
+        tilted = (base_weights + tilt).clip(lower=0.0)
+        return allocation.cap_and_renormalize(tilted, cap)
+
+    return strategy_fn_with_tilt

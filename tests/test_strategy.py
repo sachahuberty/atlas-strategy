@@ -1,10 +1,11 @@
-"""Tests for the V1 regime-switching strategy (stage 3) and the
-anomaly risk-override wrapper (stage 4)."""
+"""Tests for the V1 regime-switching strategy (stage 3), the anomaly
+risk-override wrapper (stage 4), and the mean-reversion tilt (stage 5).
+"""
 
 import numpy as np
 import pandas as pd
 
-from atlas import allocation, anomaly, regimes, strategy
+from atlas import allocation, anomaly, meanreversion, regimes, strategy
 
 POSTURE_CFG = {
     "postures": {
@@ -258,6 +259,119 @@ def test_anomaly_override_passes_through_with_too_little_history():
     # anomaly module's minimum-observations floor.
     returns = _synthetic_returns(n=10)
     wrapped = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+# --- stage 5: mean-reversion (V2) tilt wrapper -----------------------
+
+MEANREV_CFG = {
+    "optimization": {"lookback_days": 50, "covariance": "ledoit_wolf"},
+    "constraints": {"per_asset_cap": 1.0},
+    "meanreversion": {
+        "lookback_days": 40,
+        "entry_z": 2.0,
+        "exit_z": 0.5,
+        "max_half_life_days": 60,
+        "adf_lookback_days": 100,
+        "adf_pvalue_threshold": 0.05,
+        "vol_filter": False,
+        "vol_filter_percentile": 75,
+        "max_tilt_pp": 0.05,
+    },
+}
+
+
+def test_meanreversion_tilt_passes_through_when_view_is_zero(monkeypatch):
+    monkeypatch.setattr(
+        meanreversion, "has_enough_history", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        meanreversion,
+        "mean_reversion_view",
+        lambda *a, **k: pd.Series({"A": 0.0, "B": 0.0, "C": 0.0}),
+    )
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_meanreversion_tilt(_base_fn, MEANREV_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_meanreversion_tilt_shifts_weight_toward_positive_view(monkeypatch):
+    monkeypatch.setattr(
+        meanreversion, "has_enough_history", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        meanreversion,
+        "mean_reversion_view",
+        lambda *a, **k: pd.Series({"A": 1.0, "B": -1.0, "C": 0.0}),
+    )
+
+    returns = _synthetic_returns()
+    max_tilt = MEANREV_CFG["meanreversion"]["max_tilt_pp"]
+    wrapped = strategy.with_meanreversion_tilt(_base_fn, MEANREV_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    base = _base_fn(None, None)
+    expected = pd.Series(
+        {
+            "A": base["A"] + max_tilt,
+            "B": base["B"] - max_tilt,
+            "C": base["C"],
+        }
+    )
+    expected = expected / expected.sum()
+    pd.testing.assert_series_equal(
+        weights.sort_index(), expected.sort_index()
+    )
+
+
+def test_meanreversion_tilt_respects_cap(monkeypatch):
+    monkeypatch.setattr(
+        meanreversion, "has_enough_history", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        meanreversion,
+        "mean_reversion_view",
+        lambda *a, **k: pd.Series({"A": 1.0, "B": -1.0, "C": 0.0}),
+    )
+
+    returns = _synthetic_returns()
+    tight_cfg = {
+        **MEANREV_CFG,
+        "constraints": {"per_asset_cap": 0.52},
+    }
+    wrapped = strategy.with_meanreversion_tilt(_base_fn, tight_cfg)
+    weights = wrapped(returns.index[-1], returns)
+
+    assert (weights <= 0.52 + 1e-9).all()
+    assert abs(weights.sum() - 1.0) < 1e-6
+
+
+def test_meanreversion_tilt_degenerate_fit_falls_back_to_base(monkeypatch):
+    monkeypatch.setattr(
+        meanreversion, "has_enough_history", lambda *a, **k: True
+    )
+
+    def _boom(*args, **kwargs):
+        raise ValueError("ADF blew up")
+
+    monkeypatch.setattr(meanreversion, "mean_reversion_view", _boom)
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_meanreversion_tilt(_base_fn, MEANREV_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_meanreversion_tilt_passes_through_with_too_little_history():
+    # Real (non-monkeypatched) has_enough_history gate.
+    returns = _synthetic_returns(n=10)
+    wrapped = strategy.with_meanreversion_tilt(_base_fn, MEANREV_CFG)
     weights = wrapped(returns.index[-1], returns)
 
     pd.testing.assert_series_equal(weights, _base_fn(None, None))

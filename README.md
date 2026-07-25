@@ -17,7 +17,7 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 - [x] Stage 2 — classical allocations + weekly backtester (baseline)
 - [x] Stage 3 — regime detection (HMM primary) + posture switching
 - [x] Stage 4 — autoencoder anomaly override
-- [ ] Stage 5 — mean-reversion views
+- [x] Stage 5 — mean-reversion views
 - [ ] Stage 6 — technical/options views + execution timing
 - [ ] Stage 7 — sentiment views
 - [ ] Stage 8 — Black-Litterman fusion
