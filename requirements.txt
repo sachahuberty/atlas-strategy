@@ -1,0 +1,35 @@
+# Core
+pandas
+numpy
+scipy
+statsmodels
+
+# ML
+scikit-learn
+hmmlearn
+tensorflow
+
+# Data
+yfinance
+fredapi
+pyarrow
+
+# NLP / scraping (S14)
+requests
+beautifulsoup4
+nltk
+wordcloud
+gensim
+
+# Viz
+matplotlib
+seaborn
+plotly
+
+# Infra
+pyyaml
+pytest
+jupyter
+
+# NOTE: after first successful install, pin exact versions with:
+#   pip freeze > requirements.lock.txt

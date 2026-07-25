@@ -1,0 +1,96 @@
+# ATLAS master configuration
+# Every tunable parameter of the project lives here. No magic numbers in code.
+
+general:
+  base_currency: USD
+  start_date: "2010-01-01"        # earliest data pulled
+  is_end_date: "2021-12-31"       # in-sample boundary (design & tuning)
+  oos_start_date: "2022-01-01"    # out-of-sample walk-forward begins here
+  random_seed: 42
+
+universe:
+  candidate_pool_file: null        # optional CSV of candidate tickers; null = built-in pool
+  min_history_years: 8
+  min_avg_dollar_volume: 5_000_000
+  max_missing_ratio: 0.05
+  correlation_dedup_threshold: 0.95
+  n_asset_clusters: 8              # K-Means clusters for de-duplication (S6)
+  rescreen_frequency: quarterly
+  max_universe_size: 40
+
+rebalance:
+  frequency: weekly                # decision Friday close, execute next trading day
+  transaction_cost_bps: 10
+  max_weekly_turnover: 0.02        # S4 convention
+  no_trade_band: 0.005             # skip trades if L1 weight diff below this
+
+constraints:
+  long_only: true
+  per_asset_cap: 0.20
+  per_class_cap: 0.60
+  tracking_error_budget: null      # optional TE budget vs benchmark; null = off
+
+modules:                           # ablation on/off flags
+  regime_view: true                # V1
+  meanreversion_view: true         # V2
+  technical_view: true             # V3 (price levels; options part live-only)
+  sentiment_view: true             # V4
+  anomaly_override: true
+  execution_timing: true
+
+regimes:
+  hmm:
+    n_states: 3
+    features: [returns, rolling_vol]
+    refit: weekly                  # cheap; decode-only also allowed
+  kmeans_macro:
+    k: 4
+    refit: fold                    # per walk-forward fold
+    fred_series: [UNRATE, CPIAUCSL, INDPRO, T10Y2Y, FEDFUNDS, UMCSENT]
+
+anomaly:
+  sequence_length: 5
+  latent_dim: 2
+  threshold_percentile: 99
+  refit: fold
+  blend_to_gmv: 1.0                # 1.0 = fully defensive when flagged
+
+meanreversion:
+  lookback_days: 40
+  entry_z: 2.0
+  exit_z: 0.5
+  max_half_life_days: 60
+  vol_filter: true
+
+technicals:
+  pivot_order: 5
+  sr_cluster_k: 3
+  zone_width_bps: 50
+  gamma_proxy_enabled: true        # live only
+
+sentiment:
+  sources: []                      # scraper targets, filled in stage 7
+  lag_days: 1
+  score_aggregation: weekly_mean
+
+black_litterman:
+  tau: 0.05
+  view_confidence:                 # per view family, relative scale
+    regime: 1.0
+    meanreversion: 0.8
+    technical: 0.5
+    sentiment: 0.3
+
+optimization:
+  objective: max_sharpe            # on BL posterior returns
+  covariance: ledoit_wolf          # shrunk covariance
+  risk_aversion_levels: [2, 5, 10] # utility comparison (S1/S3)
+
+backtest:
+  walk_forward_fold: quarterly
+  benchmarks: [permanent, sixty_forty, max_sharpe_static, gmv, risk_parity, hrp]
+
+simulation:
+  n_scenarios: 1000
+  horizons_years: [1, 2, 4]
+  stress_scenarios: [gfc_2008, covid_2020, rates_2022]

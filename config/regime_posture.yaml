@@ -1,0 +1,18 @@
+# Regime -> allocation posture mapping.
+# IMPORTANT: regimes are identified by PROFILE (vol/return characteristics),
+# never by raw cluster index. The profile matcher in regimes.py assigns
+# each fitted state to one of these named postures at every re-fit.
+
+postures:
+  risk_on:
+    profile: { vol: low, mean_return: high }
+    allocation_method: max_sharpe_bl        # BL posterior, fully invested
+  neutral:
+    profile: { vol: medium, mean_return: medium }
+    allocation_method: risk_parity
+  risk_off:
+    profile: { vol: high, mean_return: low }
+    allocation_method: gmv_defensive        # GMV tilted to defensive classes
+    defensive_class_tilt:
+      short_bonds: 0.10                     # additive tilt caps, applied in risk.py
+      gold: 0.10
