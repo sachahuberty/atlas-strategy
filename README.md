@@ -18,7 +18,7 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 - [x] Stage 3 — regime detection (HMM primary) + posture switching
 - [x] Stage 4 — autoencoder anomaly override
 - [x] Stage 5 — mean-reversion views
-- [ ] Stage 6 — technical/options views + execution timing
+- [x] Stage 6 — technical/options views + execution timing
 - [ ] Stage 7 — sentiment views
 - [ ] Stage 8 — Black-Litterman fusion
 - [ ] Stage 9 — full walk-forward validation

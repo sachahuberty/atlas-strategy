@@ -88,6 +88,13 @@ technicals:
   pivot_order: 5
   sr_cluster_k: 3
   zone_width_bps: 50
+  max_view_magnitude: 0.02          # bounded per-asset view cap (S12)
+  min_history_days: 60              # floor for a meaningful pivot count
+  phase_fraction: 0.5               # execution timing (S12): fraction of
+                                     # the desired trade executed this
+                                     # rebalance for resistance-flagged
+                                     # assets; the rest catches up next
+                                     # time the strategy re-targets it
   gamma_proxy_enabled: true        # live only
 
 sentiment:

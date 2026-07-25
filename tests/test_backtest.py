@@ -98,6 +98,73 @@ def test_lookahead_canary_shifted_returns_change_decisions():
     assert not result_original.weights.equals(result_shifted.weights)
 
 
+def test_phase_flags_fn_spreads_entry_across_multiple_rebalances():
+    # Zero returns -> no drift, so weight changes come only from the
+    # phased-trade sequence itself, making the convergence math exact:
+    # each week the flagged asset closes half the remaining gap to
+    # target (B_n = 1 - 0.5**n after n post-switch rebalances).
+    dates = pd.bdate_range("2022-01-03", periods=60)
+    tickers = ["A", "B"]
+    returns = pd.DataFrame(0.0, index=dates, columns=tickers)
+    switch_week = dates[20].isocalendar().week
+
+    def switching_strategy(as_of, window):
+        if as_of.isocalendar().week < switch_week:
+            return pd.Series({"A": 1.0, "B": 0.0})
+        return pd.Series({"A": 0.0, "B": 1.0})
+
+    def phase_flags_fn(as_of, window):
+        return {"B"}
+
+    cfg = {
+        "rebalance": {
+            "transaction_cost_bps": 0,
+            "max_weekly_turnover": 1.0,
+            "no_trade_band": 0.0,
+        },
+        "technicals": {"phase_fraction": 0.5},
+    }
+    result = backtest.run(
+        switching_strategy, returns, cfg, phase_flags_fn=phase_flags_fn
+    )
+
+    rebalance_dates = sorted(result.turnover.index)
+    post_switch = [
+        d for d in rebalance_dates if d.isocalendar().week >= switch_week
+    ][:3]
+    # Execution lags one trading day behind each rebalance decision.
+    execution_days = [
+        returns.index[returns.index.get_loc(d) + 1] for d in post_switch
+    ]
+
+    expected = [0.5, 0.75, 0.875]
+    for day, exp in zip(execution_days, expected):
+        assert result.weights.loc[day, "B"] == pytest.approx(exp)
+
+
+def test_phase_flags_fn_is_backward_compatible_when_omitted():
+    dates = pd.bdate_range("2022-01-03", periods=20)
+    tickers = ["A", "B"]
+    returns = pd.DataFrame(0.0, index=dates, columns=tickers)
+    target = pd.Series({"A": 0.6, "B": 0.4})
+
+    def constant_strategy(as_of, window):
+        return target
+
+    cfg = {
+        "rebalance": {
+            "transaction_cost_bps": 0,
+            "max_weekly_turnover": 1.0,
+            "no_trade_band": 0.0,
+        }
+    }
+    with_none = backtest.run(
+        constant_strategy, returns, cfg, phase_flags_fn=None
+    )
+    without_arg = backtest.run(constant_strategy, returns, cfg)
+    pd.testing.assert_frame_equal(with_none.weights, without_arg.weights)
+
+
 def test_buy_and_hold_matches_independently_computed_growth():
     dates = pd.bdate_range("2022-01-03", periods=40)
     tickers = ["A", "B"]

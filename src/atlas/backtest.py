@@ -10,6 +10,17 @@ band skips negligible trades; a turnover cap scales down large ones
 from cash and is exempt from the cap (there is no "prior week" trade
 to bound).
 
+Stage 6 addition: an optional `phase_flags_fn` for execution timing
+(S12). When it flags any asset in a given rebalance, the WHOLE trade
+that week is scaled by `technicals.phase_fraction`, not just the
+flagged asset's own component -- scaling one leg alone would break the
+zero-sum trade invariant (weights must sum to 1: if one asset's entry
+is held back, another's exit must be held back correspondingly). The
+rest catches up whenever the strategy re-targets it next. Applied
+before the no-trade band and turnover cap, so a phased-down trade can
+still be skipped/capped like any other. Backward compatible: omitting
+it reproduces stage 2-5 behavior exactly.
+
 Stage 9 (not yet implemented): walk_forward, ablation. Those need the
 per-fold model refits from later stages and are out of scope here.
 
@@ -17,7 +28,7 @@ Public API (stage 2):
     BacktestResult                          # dataclass: equity, returns,
                                              # weights, turnover, costs,
                                              # metrics
-    run(strategy_fn, returns, cfg) -> BacktestResult
+    run(strategy_fn, returns, cfg, phase_flags_fn=None) -> BacktestResult
     compare(results: dict[str, BacktestResult]) -> pd.DataFrame
 """
 
@@ -39,6 +50,7 @@ from .metrics import (
 )
 
 StrategyFn = Callable[[pd.Timestamp, pd.DataFrame], pd.Series]
+PhaseFlagsFn = Callable[[pd.Timestamp, pd.DataFrame], set]
 
 
 @dataclass
@@ -64,18 +76,32 @@ def _week_end_dates(index: pd.DatetimeIndex) -> set[pd.Timestamp]:
 
 
 def run(
-    strategy_fn: StrategyFn, returns: pd.DataFrame, cfg: dict
+    strategy_fn: StrategyFn,
+    returns: pd.DataFrame,
+    cfg: dict,
+    phase_flags_fn: PhaseFlagsFn | None = None,
 ) -> BacktestResult:
     """Run the weekly backtest of `strategy_fn` over `returns`.
 
     `strategy_fn(as_of, returns_window)` must return target weights
     using only `returns_window` (already truncated to `as_of`).
+
+    `phase_flags_fn(as_of, returns_window)`, if given, returns the set
+    of tickers that should trigger phased execution this rebalance
+    (S12 execution timing): if any is present, the WHOLE trade is
+    scaled by `technicals.phase_fraction` before the no-trade band and
+    turnover cap apply.
     """
     tickers = returns.columns
     dates = returns.index
     cost_rate = cfg["rebalance"]["transaction_cost_bps"] / 1e4
     turnover_cap = cfg["rebalance"]["max_weekly_turnover"]
     no_trade_band = cfg["rebalance"]["no_trade_band"]
+    phase_fraction = (
+        cfg["technicals"]["phase_fraction"]
+        if phase_flags_fn is not None
+        else None
+    )
     rebalance_dates = _week_end_dates(dates)
 
     current_weights = pd.Series(0.0, index=tickers)
@@ -110,6 +136,21 @@ def run(
             window = returns.loc[:date]
             target = strategy_fn(date, window).reindex(tickers).fillna(0.0)
             trade = target - current_weights
+
+            if phase_flags_fn is not None and not is_first_rebalance:
+                # Funding from cash always goes straight to target;
+                # phasing only applies to steady-state rebalances.
+                # Scaling only the flagged asset's own trade component
+                # would break the zero-sum trade invariant (weights
+                # must sum to 1): if B's entry is held back, A's exit
+                # must be held back correspondingly. So when any
+                # flagged asset is involved, the WHOLE trade this
+                # rebalance is scaled by phase_fraction -- the rest
+                # catches up next time the strategy re-targets it.
+                flagged = phase_flags_fn(date, window)
+                if flagged and tickers.isin(flagged).any():
+                    trade = trade * phase_fraction
+
             one_way = trade.abs().sum() / 2.0
 
             if is_first_rebalance:

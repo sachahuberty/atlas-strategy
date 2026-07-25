@@ -1,11 +1,19 @@
 """Tests for the V1 regime-switching strategy (stage 3), the anomaly
-risk-override wrapper (stage 4), and the mean-reversion tilt (stage 5).
+risk-override wrapper (stage 4), the mean-reversion tilt (stage 5),
+and the technical tilt + phase flags (stage 6).
 """
 
 import numpy as np
 import pandas as pd
 
-from atlas import allocation, anomaly, meanreversion, regimes, strategy
+from atlas import (
+    allocation,
+    anomaly,
+    meanreversion,
+    regimes,
+    strategy,
+    technicals,
+)
 
 POSTURE_CFG = {
     "postures": {
@@ -375,3 +383,132 @@ def test_meanreversion_tilt_passes_through_with_too_little_history():
     weights = wrapped(returns.index[-1], returns)
 
     pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+# --- stage 6: technical (V3) tilt + phase flags ----------------------
+
+TECH_CFG = {
+    "optimization": {"lookback_days": 50, "covariance": "ledoit_wolf"},
+    "constraints": {"per_asset_cap": 1.0},
+    "technicals": {
+        "pivot_order": 5,
+        "sr_cluster_k": 2,
+        "zone_width_bps": 100,
+        "max_view_magnitude": 0.02,
+        "min_history_days": 60,
+        "phase_fraction": 0.5,
+    },
+}
+
+
+def test_technical_view_passes_through_when_view_is_zero(monkeypatch):
+    monkeypatch.setattr(
+        technicals, "has_enough_history", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        technicals,
+        "technical_view",
+        lambda *a, **k: pd.Series({"A": 0.0, "B": 0.0, "C": 0.0}),
+    )
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_technical_view(_base_fn, TECH_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_technical_view_shifts_weight_toward_positive_view(monkeypatch):
+    monkeypatch.setattr(
+        technicals, "has_enough_history", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        technicals,
+        "technical_view",
+        lambda *a, **k: pd.Series({"A": 1.0, "B": -1.0, "C": 0.0}),
+    )
+
+    returns = _synthetic_returns()
+    max_magnitude = TECH_CFG["technicals"]["max_view_magnitude"]
+    wrapped = strategy.with_technical_view(_base_fn, TECH_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    base = _base_fn(None, None)
+    expected = pd.Series(
+        {
+            "A": base["A"] + max_magnitude,
+            "B": base["B"] - max_magnitude,
+            "C": base["C"],
+        }
+    )
+    expected = expected / expected.sum()
+    pd.testing.assert_series_equal(
+        weights.sort_index(), expected.sort_index()
+    )
+
+
+def test_technical_view_degenerate_fit_falls_back_to_base(monkeypatch):
+    monkeypatch.setattr(
+        technicals, "has_enough_history", lambda *a, **k: True
+    )
+
+    def _boom(*args, **kwargs):
+        raise ValueError("KMeans blew up")
+
+    monkeypatch.setattr(technicals, "technical_view", _boom)
+
+    returns = _synthetic_returns()
+    wrapped = strategy.with_technical_view(_base_fn, TECH_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_technical_view_passes_through_with_too_little_history():
+    returns = _synthetic_returns(n=10)
+    wrapped = strategy.with_technical_view(_base_fn, TECH_CFG)
+    weights = wrapped(returns.index[-1], returns)
+
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_technical_phase_flags_returns_resistance_tickers(monkeypatch):
+    diag = pd.DataFrame(
+        {"role": ["resistance", "support", None]},
+        index=["A", "B", "C"],
+    )
+    monkeypatch.setattr(
+        technicals, "has_enough_history", lambda *a, **k: True
+    )
+    monkeypatch.setattr(technicals, "technical_signal", lambda *a, **k: diag)
+
+    returns = _synthetic_returns()
+    phase_flags_fn = strategy.technical_phase_flags(TECH_CFG)
+    flags = phase_flags_fn(returns.index[-1], returns)
+
+    assert flags == {"A"}
+
+
+def test_technical_phase_flags_empty_with_too_little_history():
+    returns = _synthetic_returns(n=10)
+    phase_flags_fn = strategy.technical_phase_flags(TECH_CFG)
+    flags = phase_flags_fn(returns.index[-1], returns)
+
+    assert flags == set()
+
+
+def test_technical_phase_flags_empty_on_degenerate_fit(monkeypatch):
+    monkeypatch.setattr(
+        technicals, "has_enough_history", lambda *a, **k: True
+    )
+
+    def _boom(*args, **kwargs):
+        raise ValueError("KMeans blew up")
+
+    monkeypatch.setattr(technicals, "technical_signal", _boom)
+
+    returns = _synthetic_returns()
+    phase_flags_fn = strategy.technical_phase_flags(TECH_CFG)
+    flags = phase_flags_fn(returns.index[-1], returns)
+
+    assert flags == set()

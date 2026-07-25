@@ -8,11 +8,16 @@ version.
 
 Stage 4: an anomaly risk override wrapper (L4, S8).
 
-Stage 5: a mean-reversion (V2) tilt wrapper (S10). All three stages
-build on the same contract -- a `backtest.run`-compatible
-`strategy_fn(as_of, window) -> pd.Series` -- so later stages
-(technicals, sentiment, Black-Litterman) can keep layering in without
-changing it.
+Stage 5: a mean-reversion (V2) tilt wrapper (S10).
+
+Stage 6: a technical (V3) tilt wrapper, plus a separate
+`phase_flags_fn` builder for backtest.run's execution-timing hook
+(S12) -- not a strategy_fn wrapper itself, since phasing needs the
+backtester's own current-vs-target trade, not just a weight vector.
+All strategy_fn stages build on the same contract --
+a `backtest.run`-compatible `strategy_fn(as_of, window) -> pd.Series`
+-- so later stages (sentiment, Black-Litterman) can keep layering in
+without changing it.
 
 Public API (stage 3):
     regime_switching_strategy(class_bucket, cfg, posture_cfg,
@@ -23,6 +28,10 @@ Public API (stage 4):
 
 Public API (stage 5):
     with_meanreversion_tilt(strategy_fn, cfg) -> strategy_fn
+
+Public API (stage 6):
+    with_technical_view(strategy_fn, cfg) -> strategy_fn
+    technical_phase_flags(cfg) -> phase_flags_fn
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from . import allocation, anomaly, meanreversion, regimes
+from . import allocation, anomaly, meanreversion, regimes, technicals
 
 StrategyFn = Callable[[pd.Timestamp, pd.DataFrame], pd.Series]
 
@@ -204,3 +213,65 @@ def with_meanreversion_tilt(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
         return allocation.cap_and_renormalize(tilted, cap)
 
     return strategy_fn_with_tilt
+
+
+def with_technical_view(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
+    """Wrap any strategy_fn with the V3 technical tilt (S12): nudge
+    weights toward assets sitting near a support zone (expect a
+    bounce) and away from resistance (expect rejection), bounded by
+    `technicals.max_view_magnitude`. Same naive additive-tilt
+    combination as V2 until Black-Litterman (stage 8).
+
+    Options-derived signals (OI notional, call/put walls, gamma proxy)
+    are live-only (yfinance has no chain history) and are not part of
+    this backtestable view -- see technicals.py's module docstring.
+    """
+    cap = cfg["constraints"]["per_asset_cap"]
+
+    def strategy_fn_with_view(
+        as_of: pd.Timestamp, window: pd.DataFrame
+    ) -> pd.Series:
+        base_weights = strategy_fn(as_of, window)
+
+        prices = (1.0 + window).cumprod()
+        if not technicals.has_enough_history(prices, cfg):
+            return base_weights
+
+        try:
+            view = technicals.technical_view(prices, cfg)
+        except ValueError:
+            return base_weights
+
+        view = view.reindex(base_weights.index).fillna(0.0)
+        if (view == 0).all():
+            return base_weights
+
+        scale = view.abs().max()
+        max_magnitude = cfg["technicals"]["max_view_magnitude"]
+        tilt = (view / scale) * max_magnitude if scale > 1e-12 else view
+
+        tilted = (base_weights + tilt).clip(lower=0.0)
+        return allocation.cap_and_renormalize(tilted, cap)
+
+    return strategy_fn_with_view
+
+
+def technical_phase_flags(
+    cfg: dict,
+) -> Callable[[pd.Timestamp, pd.DataFrame], set]:
+    """Build a `backtest.run`-compatible phase_flags_fn (S12 execution
+    timing): flags any asset currently sitting near a resistance zone,
+    so backtest.run phases that rebalance's trade in rather than
+    executing it in one shot."""
+
+    def phase_flags_fn(as_of: pd.Timestamp, window: pd.DataFrame) -> set:
+        prices = (1.0 + window).cumprod()
+        if not technicals.has_enough_history(prices, cfg):
+            return set()
+        try:
+            diag = technicals.technical_signal(prices, cfg)
+        except ValueError:
+            return set()
+        return set(diag[diag["role"] == "resistance"].index)
+
+    return phase_flags_fn
