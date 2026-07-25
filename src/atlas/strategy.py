@@ -25,9 +25,21 @@ historical OOS backtest (applying one fixed live snapshot across
 history would be a lookahead violation).
 
 All strategy_fn stages build on the same contract -- a
-`backtest.run`-compatible `strategy_fn(as_of, window) -> pd.Series` --
-so later stages (Black-Litterman) can keep layering in without
-changing it.
+`backtest.run`-compatible `strategy_fn(as_of, window) -> pd.Series`.
+
+Stage 8: `black_litterman_strategy` replaces stages 3-6's naive
+posture-switch + additive-tilt chain with the real fusion
+PROJECT_STRUCTURE.md 5.1 always intended: V1 (regime) becomes an
+asset-class-level view instead of a book switch; V2 (mean-reversion)
+and V3 (technical) become per-asset views instead of post-hoc tilts;
+Black-Litterman fuses all of them with an equilibrium prior into one
+posterior mu_BL; a single max_sharpe(mu_BL, Sigma) book is compared by
+utility against GMV and Risk Parity (defensive/fallback), and whichever
+wins is returned. V4 (sentiment) is omitted from the backtest (still
+live-only, see sentiment.py) but the pipeline accepts it for live use.
+The stage 3-7 wrappers remain in the codebase, tested and functional,
+as the historical record of the naive-combination era they were built
+for -- not deleted, just superseded as the "current" strategy.
 
 Public API (stage 3):
     regime_switching_strategy(class_bucket, cfg, posture_cfg,
@@ -46,6 +58,10 @@ Public API (stage 6):
 Public API (stage 7):
     with_sentiment_view(strategy_fn, cfg, class_bucket,
                          bucket_scores) -> strategy_fn
+
+Public API (stage 8):
+    black_litterman_strategy(class_bucket, cfg, posture_cfg,
+                              market_ticker) -> strategy_fn
 """
 
 from __future__ import annotations
@@ -63,6 +79,7 @@ from . import (
     regimes,
     sentiment,
     technicals,
+    views,
 )
 
 StrategyFn = Callable[[pd.Timestamp, pd.DataFrame], pd.Series]
@@ -326,3 +343,92 @@ def with_sentiment_view(
         return allocation.cap_and_renormalize(tilted, cap)
 
     return strategy_fn_with_sentiment
+
+
+def black_litterman_strategy(
+    class_bucket: pd.Series,
+    cfg: dict,
+    posture_cfg: dict,
+    market_ticker: str | None = None,
+) -> StrategyFn:
+    """Build a `backtest.run`-compatible strategy_fn implementing the
+    full Black-Litterman fusion pipeline (S4, stage 8):
+
+    1. Detect the HMM posture (same guard/fallback pattern as
+       regime_switching_strategy).
+    2. Equilibrium prior Pi from `permanent()`'s asset-class weights
+       (notebook 08: "equilibrium returns from asset-class weights").
+    3. V1 (regime posture -> asset-class view), V2 (mean-reversion),
+       V3 (technical) each contribute views; V4 (sentiment) is
+       omitted here -- still live-only (see sentiment.py).
+    4. Fuse into mu_BL via Black-Litterman.
+    5. max_sharpe(mu_BL, Sigma) is the primary book; GMV and Risk
+       Parity are defensive/fallback books; utility_select (using
+       mu_BL for all three) picks whichever wins.
+    """
+    lookback = cfg["optimization"]["lookback_days"]
+    cov_method = cfg["optimization"]["covariance"]
+    market_ticker = market_ticker or cfg["regimes"]["market_ticker"]
+    bcfg = cfg["black_litterman"]
+    risk_aversion = bcfg["risk_aversion_for_utility_gate"]
+    market_weights = allocation.permanent(class_bucket)
+
+    def strategy_fn(as_of: pd.Timestamp, window: pd.DataFrame) -> pd.Series:
+        market_returns = window[market_ticker]
+        if not regimes.has_enough_history(market_returns, cfg):
+            posture = "neutral"
+        else:
+            try:
+                regime_result = regimes.market_regime(
+                    market_returns, cfg, posture_cfg
+                )
+                posture = regime_result["current_posture"]
+            except (ValueError, np.linalg.LinAlgError):
+                posture = "neutral"
+
+        recent = window.tail(lookback)
+        cov = allocation.covariance_matrix(recent, method=cov_method)
+        tickers = recent.columns
+
+        prior = allocation.equilibrium_returns(
+            market_weights.reindex(tickers).fillna(0.0), cov, bcfg["delta"]
+        )
+
+        prices = (1.0 + window).cumprod()
+        if meanreversion.has_enough_history(prices, cfg):
+            try:
+                meanrev_view = meanreversion.mean_reversion_view(prices, cfg)
+            except ValueError:
+                meanrev_view = pd.Series(0.0, index=tickers)
+        else:
+            meanrev_view = pd.Series(0.0, index=tickers)
+
+        if technicals.has_enough_history(prices, cfg):
+            try:
+                tech_view = technicals.technical_view(prices, cfg)
+            except ValueError:
+                tech_view = pd.Series(0.0, index=tickers)
+        else:
+            tech_view = pd.Series(0.0, index=tickers)
+
+        view_sets = [
+            views.regime_view(posture, class_bucket, prior, cfg),
+            views.meanreversion_views(meanrev_view, prior, cfg),
+            views.technical_views(tech_view, prior, cfg),
+        ]
+        P, Q, Omega, _ = views.assemble(view_sets, tickers, cov, cfg)
+        mu_bl = allocation.black_litterman(
+            prior, cov, P, Q, Omega, bcfg["tau"]
+        )
+
+        candidates = {
+            "black_litterman": allocation.max_sharpe(mu_bl, cov, cfg),
+            "gmv": allocation.gmv(cov, cfg),
+            "risk_parity": allocation.risk_parity(cov, cfg),
+        }
+        _, selected = allocation.utility_select(
+            candidates, mu_bl, cov, risk_aversion
+        )
+        return selected
+
+    return strategy_fn

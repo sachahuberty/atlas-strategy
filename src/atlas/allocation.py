@@ -1,4 +1,4 @@
-"""Optimizers (L3): classical books now, Black-Litterman fusion later.
+"""Optimizers (L3): classical books, now with Black-Litterman fusion.
 
 Stage 2: max_sharpe, gmv, risk_parity, hrp, tracking_error_min,
 efficient_frontier, permanent, sixty_forty, utility_select, plus the
@@ -7,9 +7,11 @@ mean/covariance helpers they share.
 Stage 3 addition: apply_defensive_tilt, for the regime-conditional
 risk-off tilt wired in strategy.py (S7).
 
-Stage 8 (not yet implemented): equilibrium_returns, black_litterman.
-Those need the view machinery from views.py and are out of scope
-until that stage.
+Stage 8 addition: equilibrium_returns, black_litterman -- fuse
+views.py's (P, Q, Omega) with an equilibrium prior into one posterior
+expected-return vector, replacing every naive additive-tilt
+combination used since stage 3 (PROJECT_STRUCTURE.md 5.1: "until here,
+views can combine naively; BL formalizes it").
 
 All functions return pd.Series of weights indexed by ticker:
 weights >= 0, sum to 1. Constraints (long-only, per-asset cap) come
@@ -31,6 +33,10 @@ Public API (stage 2):
 
 Public API (stage 3):
     apply_defensive_tilt(weights, class_bucket, tilt, cfg) -> weights
+
+Public API (stage 8):
+    equilibrium_returns(market_weights, cov, delta) -> pd.Series  # Pi
+    black_litterman(prior, cov, P, Q, Omega, tau) -> pd.Series    # mu_BL
 """
 
 from __future__ import annotations
@@ -404,3 +410,46 @@ def apply_defensive_tilt(
 
     cap = cfg["constraints"]["per_asset_cap"]
     return cap_and_renormalize(w.clip(lower=0.0), cap)
+
+
+def equilibrium_returns(
+    market_weights: pd.Series, cov: pd.DataFrame, delta: float
+) -> pd.Series:
+    """Reverse-optimization implied equilibrium returns (S4):
+    Pi = delta * Sigma * w_mkt. `market_weights` stands in for "the
+    market" -- with no true cap-weighted data for an unrestricted,
+    multi-asset-class universe, the caller passes an asset-class-level
+    proxy (this project uses `permanent()`, matching notebook 08's
+    "equilibrium returns from asset-class weights")."""
+    tickers = market_weights.index
+    sigma = cov.loc[tickers, tickers].to_numpy()
+    w = market_weights.to_numpy()
+    return pd.Series(delta * sigma @ w, index=tickers)
+
+
+def black_litterman(
+    prior: pd.Series,
+    cov: pd.DataFrame,
+    P: np.ndarray | None,
+    Q: np.ndarray | None,
+    Omega: np.ndarray | None,
+    tau: float,
+) -> pd.Series:
+    """Black-Litterman posterior expected returns (S4): fuse the
+    equilibrium prior with views (P, Q, Omega) from views.py. With no
+    views at all (P is None or empty -- e.g. a neutral posture and no
+    V2/V3 signal fired that week), the posterior is just the prior."""
+    if P is None or len(P) == 0:
+        return prior.copy()
+
+    tickers = prior.index
+    sigma = cov.loc[tickers, tickers].to_numpy()
+    pi = prior.to_numpy()
+    tau_sigma_inv = np.linalg.inv(tau * sigma)
+    omega_inv = np.linalg.inv(Omega)
+
+    posterior_precision = tau_sigma_inv + P.T @ omega_inv @ P
+    posterior_cov = np.linalg.inv(posterior_precision)
+    posterior_mean = posterior_cov @ (tau_sigma_inv @ pi + P.T @ omega_inv @ Q)
+
+    return pd.Series(posterior_mean, index=tickers)

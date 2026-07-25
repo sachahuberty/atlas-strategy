@@ -20,7 +20,7 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 - [x] Stage 5 — mean-reversion views
 - [x] Stage 6 — technical/options views + execution timing
 - [x] Stage 7 — sentiment views
-- [ ] Stage 8 — Black-Litterman fusion
+- [x] Stage 8 — Black-Litterman fusion
 - [ ] Stage 9 — full walk-forward validation
 - [ ] Stage 10 — Monte Carlo + stress testing
 - [ ] Stage 11 — ablation study + final report

@@ -1,7 +1,7 @@
 """Tests for the V1 regime-switching strategy (stage 3), the anomaly
 risk-override wrapper (stage 4), the mean-reversion tilt (stage 5),
-the technical tilt + phase flags (stage 6), and the sentiment tilt
-(stage 7).
+the technical tilt + phase flags (stage 6), the sentiment tilt
+(stage 7), and the Black-Litterman fusion strategy (stage 8).
 """
 
 import numpy as np
@@ -583,3 +583,137 @@ def test_sentiment_view_respects_cap():
 
     assert (weights <= 0.52 + 1e-9).all()
     assert abs(weights.sum() - 1.0) < 1e-6
+
+
+# --- stage 8: Black-Litterman fusion strategy -------------------------
+
+BL_CFG = {
+    **CFG,
+    "meanreversion": {
+        "lookback_days": 40,
+        "entry_z": 2.0,
+        "exit_z": 0.5,
+        "max_half_life_days": 60,
+        "adf_lookback_days": 100,
+        "adf_pvalue_threshold": 0.05,
+        "vol_filter": False,
+        "vol_filter_percentile": 75,
+        "max_tilt_pp": 0.05,
+    },
+    "technicals": {
+        "pivot_order": 5,
+        "sr_cluster_k": 3,
+        "zone_width_bps": 50,
+        "max_view_magnitude": 0.02,
+        "min_history_days": 60,
+        "phase_fraction": 0.5,
+    },
+    "modules": {
+        "regime_view": True,
+        "meanreversion_view": True,
+        "technical_view": True,
+        "sentiment_view": True,
+    },
+    "black_litterman": {
+        "tau": 0.05,
+        "delta": 2.5,
+        "regime_view_magnitude": 0.03,
+        "risk_aversion_for_utility_gate": 5,
+        "view_confidence": {
+            "regime": 1.0,
+            "meanreversion": 0.8,
+            "technical": 0.5,
+            "sentiment": 0.3,
+        },
+    },
+}
+
+
+def test_black_litterman_strategy_returns_valid_weights():
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert abs(weights.sum() - 1.0) < 1e-6
+    assert (weights >= -1e-9).all()
+    assert set(weights.index) == set(CLASS_BUCKET.index)
+
+
+def test_black_litterman_strategy_falls_back_with_short_history():
+    # Cold-start case: not enough data for a meaningful HMM read, so
+    # posture defaults to neutral (no regime view) instead of crashing.
+    returns = _iid_returns(n=10, seed=9)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert abs(weights.sum() - 1.0) < 1e-6
+    assert (weights >= -1e-9).all()
+
+
+def test_black_litterman_strategy_falls_back_when_hmm_fit_degenerates(
+    monkeypatch,
+):
+    def _boom(*args, **kwargs):
+        raise ValueError("startprob_ must sum to 1 (got nan)")
+
+    monkeypatch.setattr(regimes, "market_regime", _boom)
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert abs(weights.sum() - 1.0) < 1e-6
+    assert (weights >= -1e-9).all()
+
+
+def test_black_litterman_strategy_uses_permanent_as_market_weights(
+    monkeypatch,
+):
+    captured = {}
+    original = allocation.equilibrium_returns
+
+    def spy(market_weights, cov, delta):
+        captured["market_weights"] = market_weights.copy()
+        captured["delta"] = delta
+        return original(market_weights, cov, delta)
+
+    monkeypatch.setattr(allocation, "equilibrium_returns", spy)
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    expected = allocation.permanent(CLASS_BUCKET)
+    pd.testing.assert_series_equal(
+        captured["market_weights"].sort_index(), expected.sort_index()
+    )
+    assert captured["delta"] == BL_CFG["black_litterman"]["delta"]
+
+
+def test_black_litterman_strategy_offers_three_candidates_to_utility_select(
+    monkeypatch,
+):
+    captured = {}
+    original = allocation.utility_select
+
+    def spy(candidates, mu, cov, risk_aversion):
+        captured["keys"] = set(candidates.keys())
+        return original(candidates, mu, cov, risk_aversion)
+
+    monkeypatch.setattr(allocation, "utility_select", spy)
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["keys"] == {"black_litterman", "gmv", "risk_parity"}

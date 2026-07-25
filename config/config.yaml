@@ -110,6 +110,11 @@ sentiment:
 
 black_litterman:
   tau: 0.05
+  delta: 2.5                        # risk-aversion / equilibrium calibration
+                                     # (classic BL default)
+  regime_view_magnitude: 0.03        # V1's asset-class-level return tilt
+  risk_aversion_for_utility_gate: 5  # which of optimization.risk_aversion_levels
+                                     # decides the BL-vs-defensive utility gate
   view_confidence:                 # per view family, relative scale
     regime: 1.0
     meanreversion: 0.8

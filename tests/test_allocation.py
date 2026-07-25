@@ -1,4 +1,4 @@
-"""Constraint tests for allocation.py (stages 2-3)."""
+"""Constraint tests for allocation.py (stages 2-3, 8)."""
 
 import numpy as np
 import pandas as pd
@@ -6,7 +6,9 @@ import pytest
 
 from atlas.allocation import (
     apply_defensive_tilt,
+    black_litterman,
     covariance_matrix,
+    equilibrium_returns,
     gmv,
     hrp,
     max_sharpe,
@@ -185,3 +187,59 @@ def test_apply_defensive_tilt_respects_cap():
 
     assert tilted.sum() == pytest.approx(1.0)
     assert (tilted <= 0.6 + 1e-6).all()
+
+
+# --- stage 8: Black-Litterman fusion ----------------------------------
+
+BL_TICKERS = ["A", "B"]
+BL_COV = pd.DataFrame(
+    {"A": [0.04, 0.01], "B": [0.01, 0.09]}, index=BL_TICKERS
+)
+
+
+def test_equilibrium_returns_known_formula():
+    market_weights = pd.Series({"A": 0.5, "B": 0.5})
+    delta = 2.5
+    prior = equilibrium_returns(market_weights, BL_COV, delta)
+
+    expected = delta * (BL_COV.to_numpy() @ market_weights.to_numpy())
+    np.testing.assert_allclose(prior.reindex(BL_TICKERS).to_numpy(), expected)
+
+
+def test_black_litterman_no_views_returns_prior_unchanged():
+    prior = pd.Series({"A": 0.06, "B": 0.12})
+    posterior = black_litterman(prior, BL_COV, None, None, None, tau=0.05)
+    pd.testing.assert_series_equal(posterior, prior)
+
+
+def test_black_litterman_high_confidence_view_pins_posterior_to_view():
+    prior = pd.Series({"A": 0.06, "B": 0.12})
+    P = np.array([[1.0, 0.0]])
+    Q = np.array([0.20])
+    Omega = np.array([[1e-8]])  # near-zero uncertainty
+
+    posterior = black_litterman(prior, BL_COV, P, Q, Omega, tau=0.05)
+
+    assert posterior["A"] == pytest.approx(0.20, abs=1e-3)
+    # Correlated asset B must also shift (BL propagates views through
+    # the covariance structure, not just onto the viewed asset).
+    assert posterior["B"] > prior["B"]
+
+
+def test_black_litterman_matches_hand_computed_two_asset_example():
+    prior = pd.Series({"A": 0.06, "B": 0.12})
+    tau = 0.05
+    P = np.array([[1.0, 0.0]])
+    Q = np.array([0.10])
+    Omega = np.array([[0.02]])
+
+    posterior = black_litterman(prior, BL_COV, P, Q, Omega, tau)
+
+    tau_sigma = tau * BL_COV.to_numpy()
+    tau_sigma_inv = np.linalg.inv(tau_sigma)
+    omega_inv = np.linalg.inv(Omega)
+    precision = tau_sigma_inv + P.T @ omega_inv @ P
+    expected = np.linalg.inv(precision) @ (
+        tau_sigma_inv @ prior.to_numpy() + P.T @ omega_inv @ Q
+    )
+    np.testing.assert_allclose(posterior.to_numpy(), expected)
