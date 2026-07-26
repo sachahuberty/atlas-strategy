@@ -81,8 +81,14 @@ def download_prices(
     use_cache: bool = True,
 ) -> pd.DataFrame:
     """Adjusted close prices for tickers, cached to data/raw/ as
-    dated parquet."""
-    key = "-".join(sorted(tickers))
+    dated parquet.
+
+    The cache key includes `start`/`end`: a request for the same
+    tickers but a different date range (e.g. a longer window for a
+    pre-2010 stress scenario) must not silently return another
+    request's cached range.
+    """
+    key = f"{'-'.join(sorted(tickers))}_{start}_{end or 'latest'}"
     cache_file = _cache_path("prices", key)
     if use_cache and cache_file.exists():
         return pd.read_parquet(cache_file)
@@ -102,8 +108,8 @@ def download_fx(
     use_cache: bool = True,
 ) -> pd.DataFrame:
     """FX rates for pairs (Yahoo tickers, e.g. 'EURUSD=X'), cached like
-    prices."""
-    key = "-".join(sorted(pairs))
+    prices (cache key includes the date range, same reasoning)."""
+    key = f"{'-'.join(sorted(pairs))}_{start}_{end or 'latest'}"
     cache_file = _cache_path("fx", key)
     if use_cache and cache_file.exists():
         return pd.read_parquet(cache_file)
@@ -122,8 +128,11 @@ def download_macro(
     end: str | None = None,
     use_cache: bool = True,
 ) -> pd.DataFrame:
-    """Macro indicator series from FRED (S8). Requires FRED_API_KEY."""
-    key = "-".join(sorted(fred_series))
+    """Macro indicator series from FRED (S8). Requires FRED_API_KEY.
+
+    Cache key includes the date range, same reasoning as
+    `download_prices`."""
+    key = f"{'-'.join(sorted(fred_series))}_{start}_{end or 'latest'}"
     cache_file = _cache_path("macro", key)
     if use_cache and cache_file.exists():
         return pd.read_parquet(cache_file)

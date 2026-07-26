@@ -22,7 +22,7 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 - [x] Stage 7 — sentiment views
 - [x] Stage 8 — Black-Litterman fusion
 - [x] Stage 9 — full walk-forward validation
-- [ ] Stage 10 — Monte Carlo + stress testing
+- [x] Stage 10 — Monte Carlo + stress testing
 - [ ] Stage 11 — ablation study + final report
 
 ## Setup
@@ -59,3 +59,13 @@ peak IS performance, did not improve OOS Sharpe over stage 8's
 untuned defaults (0.86 vs. 0.895) -- reported as found, per this
 project's overfitting-defense discipline. Full per-quarter breakdown
 and methodology notes in `notebooks/09_strategy_backtest.ipynb`.
+
+**Stage 10 forward-looking risk report** (notebook 10), on the current
+book as of 2026-07-24: historical stress through 2008/2020/2022 shows
+-17.6% / -16.9% / -10.4% cumulative return respectively (GFC 2008 the
+worst, -22.6% max drawdown); a reverse stress scan of the full
+2007-2026 history independently rediscovers the COVID crash
+(2020-03-16, -4.8%) as the single worst realized day, cross-validating
+the hand-picked scenario windows. A 1,000-path GBM Monte Carlo on the
+strategy's own realized OOS drift/vol (4.4% / 5.3%) gives P(positive)
+of 80% at 1 year rising to 95% at 4 years.

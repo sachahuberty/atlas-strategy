@@ -153,6 +153,23 @@ grid_search:
     no_trade_band: [0.0025, 0.005, 0.01]
     max_weekly_turnover: [0.01, 0.02, 0.04]
 
+risk:
+  stress_data_start: "2007-01-01"  # wider window than general.start_date
+                                    # (2010): needed to cover the 2008 GFC
+  scenarios:                       # acute-crisis windows where every
+                                    # universe ticker has real data (S7)
+    gfc_2008: ["2008-09-01", "2009-03-31"]     # Lehman collapse to bottom
+    covid_2020: ["2020-02-19", "2020-03-23"]   # peak to trough
+    rates_2022: ["2022-01-01", "2022-10-31"]   # rate-hike selloff
+  sensitivity_shocks:               # one-shot per-asset-class return
+                                    # shocks for the sensitivity table (S7)
+    equity: [-0.10, -0.20, -0.30]
+    fixed_income: [-0.05, -0.10]
+    commodity: [-0.20, -0.30]
+    cash: [0.0]
+  reverse_stress_window_days: 20   # rolling N-day window scanned for the
+                                    # worst realized loss (S7)
+
 simulation:
   n_scenarios: 1000
   horizons_years: [1, 2, 4]
