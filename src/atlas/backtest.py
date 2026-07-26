@@ -21,8 +21,23 @@ before the no-trade band and turnover cap, so a phased-down trade can
 still be skipped/capped like any other. Backward compatible: omitting
 it reproduces stage 2-5 behavior exactly.
 
-Stage 9 (not yet implemented): walk_forward, ablation. Those need the
-per-fold model refits from later stages and are out of scope here.
+Stage 9 addition: walk_forward, memoize_strategy, grid_search.
+walk_forward slices an existing run's daily returns into folds and
+reports per-fold metrics plus a cross-fold stability score (S10: "OOS
+performance = average over folds, not one split") -- it reuses the
+SAME continuous, chronological `run` rather than re-fitting a wholly
+separate model per fold, since the per-signal refit caches (HMM
+weekly, autoencoder every `anomaly.refit_frequency_days`) already
+implement the "model clock" walk-forward stage 3-8 established; folds
+here are a reporting slice, not a different computation. grid_search
+is a generic IS-only tuning utility; memoize_strategy caches a
+strategy_fn's output by date, making a rebalance-parameter-only grid
+search (e.g. turnover cap, no-trade band) cheap by reusing one
+expensive weekly signal computation across every candidate.
+
+Stage 11 (not yet implemented): ablation. Needs the per-module on/off
+flag wiring from views.py stage 8 already built, but the actual
+marginal-Sharpe comparison table is out of scope until that stage.
 
 Public API (stage 2):
     BacktestResult                          # dataclass: equity, returns,
@@ -30,10 +45,18 @@ Public API (stage 2):
                                              # metrics
     run(strategy_fn, returns, cfg, phase_flags_fn=None) -> BacktestResult
     compare(results: dict[str, BacktestResult]) -> pd.DataFrame
+
+Public API (stage 9):
+    WalkForwardResult                       # dataclass: fold_metrics,
+                                             # summary
+    walk_forward(daily_returns, cfg, fold=None) -> WalkForwardResult
+    memoize_strategy(strategy_fn) -> strategy_fn
+    grid_search(param_grid, evaluate_fn) -> pd.DataFrame
 """
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -206,3 +229,103 @@ def compare(results: dict[str, BacktestResult]) -> pd.DataFrame:
     return pd.DataFrame(
         {name: result.metrics for name, result in results.items()}
     ).T
+
+
+@dataclass
+class WalkForwardResult:
+    """Per-fold metrics for an already-computed daily-returns series.
+
+    `stability_score` in `summary` is `mean(fold sharpe) - penalty *
+    std(fold sharpe)` (S10 grid-search criterion): it rewards a
+    strategy that holds up across folds over one with a higher average
+    driven by a single lucky fold.
+    """
+
+    fold_metrics: pd.DataFrame
+    summary: dict
+
+
+_FOLD_PERIOD_CODE = {"quarterly": "Q", "annual": "Y"}
+
+
+def walk_forward(
+    daily_returns: pd.Series, cfg: dict, fold: str | None = None
+) -> WalkForwardResult:
+    """Slice `daily_returns` into folds and report metrics per fold.
+
+    `fold` is `"quarterly"` or `"annual"`; defaults to
+    `cfg["backtest"]["walk_forward_fold"]`. This slices the output of
+    one continuous, chronological `run` into reporting periods -- it
+    does not re-fit any model per fold. The per-signal refit caches
+    already in `strategy.py` (HMM refit weekly, autoencoder every
+    `anomaly.refit_frequency_days`) are the actual "model clock"; folds
+    here only change how the resulting daily returns are aggregated
+    for reporting.
+    """
+    code = _FOLD_PERIOD_CODE[fold or cfg["backtest"]["walk_forward_fold"]]
+    periods = daily_returns.index.to_period(code)
+
+    rows = {}
+    for period, fold_returns in daily_returns.groupby(periods):
+        rows[str(period)] = {
+            "ann_return": ann_return(fold_returns),
+            "ann_vol": ann_vol(fold_returns),
+            "sharpe": sharpe(fold_returns),
+            "sortino": sortino(fold_returns),
+            "max_drawdown": max_drawdown(fold_returns),
+            "hit_rate": hit_rate(fold_returns),
+            "n_days": len(fold_returns),
+        }
+    fold_metrics = pd.DataFrame(rows).T
+
+    penalty = cfg["grid_search"]["stability_penalty"]
+    sharpe_mean = fold_metrics["sharpe"].mean()
+    sharpe_std = (
+        fold_metrics["sharpe"].std(ddof=1) if len(fold_metrics) > 1 else 0.0
+    )
+    summary = {
+        "sharpe_mean": sharpe_mean,
+        "sharpe_std": sharpe_std,
+        "stability_score": sharpe_mean - penalty * sharpe_std,
+    }
+    return WalkForwardResult(fold_metrics=fold_metrics, summary=summary)
+
+
+def memoize_strategy(strategy_fn: StrategyFn) -> StrategyFn:
+    """Cache `strategy_fn`'s target weights by `as_of` date.
+
+    Target weights are a deterministic function of `(as_of, window)`,
+    and `window = returns.loc[:as_of]` is itself determined by `as_of`
+    for a fixed `returns` DataFrame, so caching on `as_of` alone is
+    safe. This lets a grid search over rebalance-only parameters
+    (turnover cap, no-trade band) reuse one expensive weekly signal
+    computation across every candidate combination instead of
+    recomputing it from scratch each time.
+    """
+    cache: dict[pd.Timestamp, pd.Series] = {}
+
+    def memoized(as_of: pd.Timestamp, window: pd.DataFrame) -> pd.Series:
+        if as_of not in cache:
+            cache[as_of] = strategy_fn(as_of, window)
+        return cache[as_of].copy()
+
+    return memoized
+
+
+def grid_search(
+    param_grid: dict[str, list],
+    evaluate_fn: Callable[[dict], dict],
+) -> pd.DataFrame:
+    """Evaluate `evaluate_fn` over the Cartesian product of `param_grid`.
+
+    `evaluate_fn(params)` must return a metrics dict for that
+    combination. In-sample-only tuning (S10): select on
+    `stability_score` from `walk_forward`, not on peak single-fold
+    performance.
+    """
+    keys = list(param_grid.keys())
+    rows = []
+    for combo in itertools.product(*param_grid.values()):
+        params = dict(zip(keys, combo))
+        rows.append({**params, **evaluate_fn(params)})
+    return pd.DataFrame(rows)

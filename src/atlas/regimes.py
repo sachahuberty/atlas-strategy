@@ -26,12 +26,23 @@ Public API:
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+
+# hmmlearn logs a "Model is not converging" warning via `logging` (not
+# `warnings`) whenever a fit exhausts n_iter without meeting tolerance
+# -- expected and already accounted for by the fixed n_iter cap below,
+# not something to act on. Left at WARNING level it floods Jupyter's
+# IOPub channel on every weekly refit across a multi-year backtest,
+# which measurably slows notebook execution (confirmed: an identical
+# grid search ran ~4x faster outside a notebook kernel, stage 9).
+logging.getLogger("hmmlearn").setLevel(logging.ERROR)
 
 _PROFILE_RANK = {"low": 0, "medium": 1, "high": 2}
 

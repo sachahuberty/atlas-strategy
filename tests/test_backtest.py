@@ -1,4 +1,4 @@
-"""Accounting and no-lookahead tests for backtest.py (stage 2)."""
+"""Accounting and no-lookahead tests for backtest.py (stage 2, 9)."""
 
 import numpy as np
 import pandas as pd
@@ -208,3 +208,128 @@ def test_buy_and_hold_matches_independently_computed_growth():
         manual_bh,
         check_names=False,
     )
+
+
+def test_walk_forward_folds_partition_full_range():
+    dates = pd.bdate_range("2020-01-01", periods=500)
+    rng = np.random.default_rng(1)
+    daily_returns = pd.Series(
+        rng.normal(0.0003, 0.01, len(dates)), index=dates
+    )
+    cfg = {
+        "backtest": {"walk_forward_fold": "quarterly"},
+        "grid_search": {"stability_penalty": 1.0},
+    }
+    result = backtest.walk_forward(daily_returns, cfg)
+
+    assert result.fold_metrics["n_days"].sum() == len(dates)
+    n_expected_quarters = len(dates.to_period("Q").unique())
+    assert len(result.fold_metrics) == n_expected_quarters
+
+
+def test_walk_forward_fold_arg_overrides_cfg_default():
+    dates = pd.bdate_range("2020-01-01", periods=500)
+    rng = np.random.default_rng(2)
+    daily_returns = pd.Series(
+        rng.normal(0.0003, 0.01, len(dates)), index=dates
+    )
+    cfg = {
+        "backtest": {"walk_forward_fold": "annual"},
+        "grid_search": {"stability_penalty": 1.0},
+    }
+    annual = backtest.walk_forward(daily_returns, cfg)
+    quarterly = backtest.walk_forward(daily_returns, cfg, fold="quarterly")
+
+    assert len(quarterly.fold_metrics) > len(annual.fold_metrics)
+
+
+def test_walk_forward_summary_matches_stability_formula():
+    dates = pd.bdate_range("2020-01-01", periods=500)
+    rng = np.random.default_rng(3)
+    daily_returns = pd.Series(
+        rng.normal(0.0003, 0.01, len(dates)), index=dates
+    )
+    penalty = 1.5
+    cfg = {
+        "backtest": {"walk_forward_fold": "quarterly"},
+        "grid_search": {"stability_penalty": penalty},
+    }
+    result = backtest.walk_forward(daily_returns, cfg)
+
+    sharpe_mean = result.fold_metrics["sharpe"].mean()
+    sharpe_std = result.fold_metrics["sharpe"].std(ddof=1)
+    assert result.summary["sharpe_mean"] == pytest.approx(sharpe_mean)
+    assert result.summary["sharpe_std"] == pytest.approx(sharpe_std)
+    assert result.summary["stability_score"] == pytest.approx(
+        sharpe_mean - penalty * sharpe_std
+    )
+
+
+def test_walk_forward_penalizes_variance_across_folds():
+    # Same overall mean daily return, but one series delivers it evenly
+    # across every quarter (low cross-fold sharpe variance) while the
+    # other concentrates all of it into a single quarter and is flat
+    # elsewhere (high cross-fold sharpe variance). The stable series
+    # must score higher despite an equal total return.
+    dates = pd.bdate_range("2020-01-01", periods=500)
+    steady = pd.Series(0.0004, index=dates)
+
+    lumpy = pd.Series(0.0, index=dates)
+    total_growth = (1.0 + steady).prod()
+    burst = dates[:63]
+    lumpy.loc[burst] = total_growth ** (1.0 / len(burst)) - 1.0
+
+    cfg = {
+        "backtest": {"walk_forward_fold": "quarterly"},
+        "grid_search": {"stability_penalty": 1.0},
+    }
+    steady_result = backtest.walk_forward(steady, cfg)
+    lumpy_result = backtest.walk_forward(lumpy, cfg)
+
+    assert (
+        steady_result.summary["stability_score"]
+        > lumpy_result.summary["stability_score"]
+    )
+
+
+def test_memoize_strategy_calls_underlying_once_per_date():
+    dates = pd.bdate_range("2022-01-03", periods=10)
+    returns = pd.DataFrame(0.0, index=dates, columns=["A", "B"])
+    calls = []
+
+    def strategy(as_of, window):
+        calls.append(as_of)
+        return pd.Series({"A": 0.6, "B": 0.4})
+
+    memoized = backtest.memoize_strategy(strategy)
+    memoized(dates[0], returns.loc[: dates[0]])
+    memoized(dates[0], returns.loc[: dates[0]])
+    memoized(dates[1], returns.loc[: dates[1]])
+
+    assert calls == [dates[0], dates[1]]
+
+
+def test_memoize_strategy_returned_series_is_a_copy():
+    def strategy(as_of, window):
+        return pd.Series({"A": 0.6, "B": 0.4})
+
+    memoized = backtest.memoize_strategy(strategy)
+    as_of = pd.Timestamp("2022-01-03")
+    first = memoized(as_of, None)
+    first.loc["A"] = 999.0
+    second = memoized(as_of, None)
+
+    assert second.loc["A"] == pytest.approx(0.6)
+
+
+def test_grid_search_evaluates_full_cartesian_product():
+    def evaluate(params):
+        return {"metric": params["x"] + params["y"]}
+
+    grid = backtest.grid_search({"x": [1, 2], "y": [10, 20, 30]}, evaluate)
+
+    assert len(grid) == 6
+    assert set(grid["x"]) == {1, 2}
+    assert set(grid["y"]) == {10, 20, 30}
+    row = grid[(grid["x"] == 2) & (grid["y"] == 30)].iloc[0]
+    assert row["metric"] == 32

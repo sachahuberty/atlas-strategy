@@ -21,8 +21,12 @@ universe:
 rebalance:
   frequency: weekly                # decision Friday close, execute next trading day
   transaction_cost_bps: 10
-  max_weekly_turnover: 0.02        # S4 convention
-  no_trade_band: 0.005             # skip trades if L1 weight diff below this
+  max_weekly_turnover: 0.01        # frozen by stage 9's IS-only grid search
+                                    # (notebook 09): highest cross-fold
+                                    # stability score among the grid, though
+                                    # scores were closely clustered
+  no_trade_band: 0.01              # frozen alongside max_weekly_turnover,
+                                    # same stage-9 grid search
 
 constraints:
   long_only: true
@@ -69,7 +73,10 @@ anomaly:
   blend_to_gmv: 1.0                # 1.0 = fully defensive when flagged
 
 meanreversion:
-  lookback_days: 40
+  lookback_days: 20                # frozen by stage 9's IS-only event-study
+                                    # grid search (notebook 09), selected on
+                                    # cross-fold hit-rate stability over 2010-
+                                    # 2021, not peak IS hit rate
   entry_z: 2.0
   exit_z: 0.5                      # position-level hysteresis; not yet
                                     # used by the stateless weekly view
@@ -128,8 +135,23 @@ optimization:
   lookback_days: 756               # trailing window for mu/cov, ~3Y (S6 convention)
 
 backtest:
-  walk_forward_fold: quarterly
+  walk_forward_fold: quarterly       # final OOS fold reporting granularity
   benchmarks: [permanent, sixty_forty, max_sharpe_static, gmv, risk_parity, hrp]
+
+grid_search:
+  is_validation_fold: annual         # IS-only tuning fold granularity (S10):
+                                     # coarser than the OOS quarterly folds
+                                     # so each fold has enough data for a
+                                     # meaningful stability read
+  stability_penalty: 1.0             # score = mean(fold_metric) -
+                                     # penalty * std(fold_metric): rewards
+                                     # consistency, not peak performance
+  meanreversion:
+    lookback_days: [20, 40, 60]
+    entry_z: [1.5, 2.0, 2.5]
+  turnover:
+    no_trade_band: [0.0025, 0.005, 0.01]
+    max_weekly_turnover: [0.01, 0.02, 0.04]
 
 simulation:
   n_scenarios: 1000
