@@ -23,7 +23,7 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 - [x] Stage 8 — Black-Litterman fusion
 - [x] Stage 9 — full walk-forward validation
 - [x] Stage 10 — Monte Carlo + stress testing
-- [ ] Stage 11 — ablation study + final report
+- [x] Stage 11 — ablation study
 
 ## Setup
 
@@ -69,3 +69,16 @@ worst, -22.6% max drawdown); a reverse stress scan of the full
 the hand-picked scenario windows. A 1,000-path GBM Monte Carlo on the
 strategy's own realized OOS drift/vol (4.4% / 5.3%) gives P(positive)
 of 80% at 1 year rising to 95% at 4 years.
+
+**Stage 11 ablation study** (notebook 11), the project's designated
+referee for module worth: V1 (regime view) is the strategy's clearest
+positive contributor (+0.147 marginal OOS Sharpe); V3 (technical view)
+is actively hurting performance (-0.265 marginal Sharpe, the largest
+effect in the study, in the wrong direction); V2 (mean-reversion) is
+essentially inert (-0.013), consistent with a diagnosed unit-scale bug
+now being fixed; the anomaly override barely moves the needle (+0.002,
+matching stage 4's original finding); sentiment (V4) is a structural
+zero since it was never wired into the backtested pipeline. A
+turnover-cap sensitivity check found relaxing the frozen 1% cap to the
+S4-convention 2% raises OOS Sharpe from 0.806 to 0.875 with no
+drawdown cost -- see below for the resulting config changes.
