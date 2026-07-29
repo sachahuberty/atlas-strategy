@@ -20,6 +20,19 @@ system; this module is a stateless weekly view generator (no held
 position to exit from), so it isn't used here -- it becomes relevant
 once views feed an actual position-tracking layer.
 
+Stage 11 fix: `view` (in `reversion_signal`) used to be `beta *
+detrended` -- the OU regression's raw expected NEXT-DAY drift, a few
+tens of basis points. `views._per_asset_views` adds this straight to
+the ANNUALIZED equilibrium prior, so the view entered Black-Litterman
+a full order of magnitude (or more) below `regime_view_magnitude`
+(0.03) and `technicals.max_view_magnitude` (0.02) -- effectively
+noise, not a real signal, confirmed by the stage-11 ablation showing
+V2's marginal OOS Sharpe contribution near zero. Fixed by scaling the
+daily drift by the (capped) reversion half-life in days, so it
+represents the expected cumulative move over the reversion horizon
+instead of one day -- landing in the same ballpark as the other view
+families.
+
 Public API:
     detrend_log_price(prices, lookback) -> pd.DataFrame
     zscore(series, lookback) -> pd.Series | pd.DataFrame
@@ -123,9 +136,13 @@ def reversion_signal(
 ) -> pd.DataFrame:
     """Per-asset mean-reversion diagnostic table as of the last (or
     given) date: z, ADF p-value, half-life, vol-filter pass, and the
-    resulting view (S10). `view` is the OU regression's own fitted
-    expected next-period drift (beta * current deviation), zero
-    unless |z| > entry_z, ADF, half-life, and vol-filter all pass.
+    resulting view (S10). `view` is the OU regression's fitted
+    expected next-day drift (beta * current deviation), scaled by the
+    (capped) half-life in days to express it as an expected return
+    over the reversion horizon rather than a raw one-day drift --
+    comparable in magnitude to the other (annual) view families, not
+    two orders of magnitude below them (stage 11 fix). Zero unless
+    |z| > entry_z, ADF, half-life, and vol-filter all pass.
     """
     mcfg = cfg["meanreversion"]
     window = mcfg["lookback_days"]
@@ -167,7 +184,14 @@ def reversion_signal(
         & diag["vol_ok"]
     ).fillna(False)
 
-    diag["view"] = (diag["beta"] * diag["detrended"]).where(
+    # beta * detrended alone is the expected NEXT-DAY drift; scaling by
+    # the (capped) half-life turns it into an expected return over the
+    # reversion horizon, comparable in magnitude to the other (annual)
+    # view families instead of ~two orders of magnitude below them.
+    # The cap rarely binds in practice: `tradeable` already requires
+    # half_life <= max_half_life_days (60 by default), well under 252.
+    horizon = diag["half_life"].clip(upper=252)
+    diag["view"] = (diag["beta"] * diag["detrended"] * horizon).where(
         diag["tradeable"], 0.0
     )
     return diag

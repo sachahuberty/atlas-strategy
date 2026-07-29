@@ -163,3 +163,37 @@ def test_mean_reversion_view_is_zero_when_not_tradeable():
     prices = pd.DataFrame({"A": [100.0] * 100})
     view = meanreversion.mean_reversion_view(prices, CFG)
     assert view["A"] == 0.0
+
+
+def test_view_magnitude_same_order_as_other_view_families():
+    # Stage 11 fix: the OU view used to be a raw one-day drift (beta *
+    # detrended), which entered Black-Litterman ~two orders of
+    # magnitude below the other (annual) view families -- effectively
+    # noise. Scaling by the (capped) half-life should bring a genuine
+    # tradeable signal within one order of magnitude of
+    # regime_view_magnitude (0.03) and technicals.max_view_magnitude
+    # (0.02), not silently off by 100x.
+    other_view_magnitudes = [0.03, 0.02]
+
+    prices = _ou_series(theta=0.1, sigma=0.02, seed=7)
+    log_price = np.log(prices)
+    lookback = CFG["meanreversion"]["lookback_days"]
+    z_full = meanreversion.zscore(log_price, lookback)
+    extreme_dates = z_full[z_full["MR"].abs() > 2.0].index
+    assert len(extreme_dates) > 0
+
+    found_tradeable = False
+    for as_of in extreme_dates:
+        diag = meanreversion.reversion_signal(prices, CFG, as_of=as_of)
+        row = diag.loc["MR"]
+        if row["tradeable"]:
+            found_tradeable = True
+            magnitude = abs(row["view"])
+            for other in other_view_magnitudes:
+                assert other / 10 <= magnitude <= other * 10, (
+                    f"view magnitude {magnitude} is not within one "
+                    f"order of magnitude of {other}"
+                )
+            break
+
+    assert found_tradeable, "expected at least one tradeable extreme date"
