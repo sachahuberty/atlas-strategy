@@ -40,25 +40,33 @@ pytest
 
 Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09), frozen
 config after stage 9's IS-only grid search (`meanreversion.lookback_days=20`,
-`rebalance.no_trade_band=0.01`, `rebalance.max_weekly_turnover=0.01`):
+`rebalance.no_trade_band=0.01`, `rebalance.max_weekly_turnover=0.01`),
+re-run after the stage-11 V2 unit-mismatch fix:
 
 | Strategy | Sharpe | Max drawdown | Ann. vol |
 | --- | --- | --- | --- |
-| permanent | 1.10 | -12.6% | 8.3% |
-| black_litterman (frozen) | 0.86 | -10.4% | 5.3% |
-| risk_parity | 0.84 | -16.5% | 9.8% |
-| hrp | 0.82 | -9.2% | 3.6% |
-| gmv | 0.74 | -8.1% | 3.2% |
-| max_sharpe_static | 0.62 | -13.6% | 5.5% |
-| sixty_forty | 0.58 | -22.5% | 11.5% |
+| permanent | 1.07 | -12.6% | 8.3% |
+| hrp | 0.85 | -9.2% | 3.6% |
+| black_litterman (frozen) | 0.83 | -10.2% | 5.2% |
+| risk_parity | 0.81 | -16.6% | 9.8% |
+| gmv | 0.75 | -8.1% | 3.2% |
+| max_sharpe_static | 0.60 | -13.6% | 5.5% |
+| sixty_forty | 0.56 | -22.6% | 11.5% |
 
 The naive `permanent` benchmark still posts the best OOS Sharpe, as it
 has since stage 8. Grid-searching mean-reversion and turnover
 parameters IS-only, selected for cross-fold stability rather than
 peak IS performance, did not improve OOS Sharpe over stage 8's
-untuned defaults (0.86 vs. 0.895) -- reported as found, per this
-project's overfitting-defense discipline. Full per-quarter breakdown
-and methodology notes in `notebooks/09_strategy_backtest.ipynb`.
+untuned defaults (0.83 vs. 0.895) -- reported as found, per this
+project's overfitting-defense discipline. **Fixing the V2 unit-
+mismatch bug (below) did not improve the frozen strategy's OOS Sharpe
+either (0.8348, down slightly from 0.8564 pre-fix)** -- once properly
+scaled, mean-reversion's net contribution in this OOS window is still
+marginally negative, consistent with stage 5's own event study finding
+mixed reversion hit rates across the universe. The fix was made on its
+own merits (a real unit bug, not a calibration choice) and reported
+honestly regardless of outcome. Full per-quarter breakdown and
+methodology notes in `notebooks/09_strategy_backtest.ipynb`.
 
 **Stage 10 forward-looking risk report** (notebook 10), on the current
 book as of 2026-07-24: historical stress through 2008/2020/2022 shows
