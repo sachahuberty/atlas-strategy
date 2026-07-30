@@ -38,35 +38,50 @@ pytest
 
 ## Results
 
-Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09), frozen
-config after stage 9's IS-only grid search (`meanreversion.lookback_days=20`,
-`rebalance.no_trade_band=0.01`, `rebalance.max_weekly_turnover=0.01`),
-re-run after the stage-11 V2 unit-mismatch fix:
+Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09), after
+the stage-11 V2 unit-mismatch fix and the turnover-cap policy
+restoration (`rebalance.max_weekly_turnover=0.02`, `no_trade_band=0.005`,
+S4 convention -- no longer grid-tuned, see below):
 
 | Strategy | Sharpe | Max drawdown | Ann. vol |
 | --- | --- | --- | --- |
 | permanent | 1.07 | -12.6% | 8.3% |
-| hrp | 0.85 | -9.2% | 3.6% |
-| black_litterman (frozen) | 0.83 | -10.2% | 5.2% |
-| risk_parity | 0.81 | -16.6% | 9.8% |
-| gmv | 0.75 | -8.1% | 3.2% |
+| black_litterman (frozen) | 0.90 | -10.0% | 5.5% |
+| hrp | 0.82 | -9.2% | 3.5% |
+| risk_parity | 0.81 | -16.5% | 9.8% |
+| gmv | 0.74 | -8.1% | 3.2% |
 | max_sharpe_static | 0.60 | -13.6% | 5.5% |
-| sixty_forty | 0.56 | -22.6% | 11.5% |
+| sixty_forty | 0.57 | -22.5% | 11.5% |
 
-The naive `permanent` benchmark still posts the best OOS Sharpe, as it
-has since stage 8. Grid-searching mean-reversion and turnover
-parameters IS-only, selected for cross-fold stability rather than
-peak IS performance, did not improve OOS Sharpe over stage 8's
-untuned defaults (0.83 vs. 0.895) -- reported as found, per this
-project's overfitting-defense discipline. **Fixing the V2 unit-
-mismatch bug (below) did not improve the frozen strategy's OOS Sharpe
-either (0.8348, down slightly from 0.8564 pre-fix)** -- once properly
-scaled, mean-reversion's net contribution in this OOS window is still
-marginally negative, consistent with stage 5's own event study finding
-mixed reversion hit rates across the universe. The fix was made on its
-own merits (a real unit bug, not a calibration choice) and reported
-honestly regardless of outcome. Full per-quarter breakdown and
-methodology notes in `notebooks/09_strategy_backtest.ipynb`.
+The naive `permanent` benchmark still posts the best OOS Sharpe, but
+the gap has narrowed considerably over the course of stages 9-11.
+Two changes bracket this table's history:
+
+- **Fixing the V2 unit-mismatch bug did not improve OOS Sharpe**
+  (0.8348, down slightly from the pre-fix 0.8564) -- once properly
+  scaled, mean-reversion's net contribution in this OOS window is
+  still marginally negative, consistent with stage 5's own event
+  study finding mixed reversion hit rates across the universe. Fixed
+  on its own merits (a real unit bug, not a calibration choice) and
+  reported honestly regardless of outcome.
+- **Restoring the turnover cap to the S4-convention 2% (from stage 9's
+  grid-frozen 1%, where the no-trade band equaled the cap and
+  collapsed every rebalance to "trade exactly 1% or freeze") is the
+  single largest improvement in the project's history: Sharpe rose
+  from 0.8348 to 0.8969**, with max drawdown actually improving
+  slightly (-10.02% vs -10.18%). `black_litterman_frozen` now beats
+  both `risk_parity` and `hrp` for the first time. Stage 11's ablation
+  had already flagged this precisely: a stability-penalized grid
+  applied to a risk-control cap will always buy stability with
+  paralysis, regardless of signal quality -- unwinding that throttle,
+  not any signal improvement, drove this gain.
+
+Grid-searching mean-reversion parameters IS-only, selected for
+cross-fold stability, remains in place (`meanreversion.lookback_days=20`);
+the turnover parameters are no longer grid-selected -- see
+`config.yaml`'s `rebalance` section and notebook 09's addenda for the
+full reasoning. Full per-quarter breakdown and methodology notes in
+`notebooks/09_strategy_backtest.ipynb`.
 
 **Stage 10 forward-looking risk report** (notebook 10), on the current
 book as of 2026-07-24: historical stress through 2008/2020/2022 shows
