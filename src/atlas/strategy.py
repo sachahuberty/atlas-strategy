@@ -362,9 +362,12 @@ def black_litterman_strategy(
        V3 (technical) each contribute views; V4 (sentiment) is
        omitted here -- still live-only (see sentiment.py).
     4. Fuse into mu_BL via Black-Litterman.
-    5. max_sharpe(mu_BL, Sigma) is the primary book; GMV and Risk
-       Parity are defensive/fallback books; utility_select (using
-       mu_BL for all three) picks whichever wins.
+    5. max_sharpe(mu_BL, Sigma) is the primary book, with the `cash`
+       bucket excluded from its universe (stage 11: rf=0 makes a
+       near-zero-vol cash proxy degenerate in this objective -- see
+       allocation.max_sharpe); GMV and Risk Parity are defensive/
+       fallback books and remain free to hold cash; utility_select
+       (using mu_BL for all three) picks whichever wins.
     """
     lookback = cfg["optimization"]["lookback_days"]
     cov_method = cfg["optimization"]["covariance"]
@@ -372,6 +375,14 @@ def black_litterman_strategy(
     bcfg = cfg["black_litterman"]
     risk_aversion = bcfg["risk_aversion_for_utility_gate"]
     market_weights = allocation.permanent(class_bucket)
+    # Excluded from max_sharpe's universe only (stage 11): at rf=0, a
+    # near-zero-vol cash proxy has an enormous implied Sharpe
+    # regardless of its actual expected return, pulling the book
+    # toward it by construction of the objective, not because of any
+    # view. GMV/Risk Parity don't share this degeneracy and are left
+    # free to hold cash as a genuine defensive asset -- see
+    # allocation.max_sharpe's docstring.
+    cash_tickers = class_bucket[class_bucket == "cash"].index.tolist()
 
     def strategy_fn(as_of: pd.Timestamp, window: pd.DataFrame) -> pd.Series:
         market_returns = window[market_ticker]
@@ -422,7 +433,9 @@ def black_litterman_strategy(
         )
 
         candidates = {
-            "black_litterman": allocation.max_sharpe(mu_bl, cov, cfg),
+            "black_litterman": allocation.max_sharpe(
+                mu_bl, cov, cfg, exclude=cash_tickers
+            ),
             "gmv": allocation.gmv(cov, cfg),
             "risk_parity": allocation.risk_parity(cov, cfg),
         }

@@ -43,6 +43,40 @@ def test_max_sharpe_respects_constraints(synthetic_returns):
     _assert_valid_weights(max_sharpe(mu, cov, CFG))
 
 
+def test_max_sharpe_cash_degeneracy_without_exclude():
+    # A near-zero-vol, near-zero-return "cash" asset gets a large
+    # weight purely from the rf=0 Sharpe objective's degeneracy, not
+    # because of any real expected-return edge (stage 11 finding).
+    mu = pd.Series({"A": 0.05, "B": 0.08, "CASH": 0.0001})
+    cov = pd.DataFrame(
+        [[0.04, 0.01, 0.0], [0.01, 0.09, 0.0], [0.0, 0.0, 1e-5]],
+        index=["A", "B", "CASH"],
+        columns=["A", "B", "CASH"],
+    )
+    w = max_sharpe(mu, cov, CFG)
+    assert w["CASH"] > 0.2
+
+
+def test_max_sharpe_exclude_removes_cash_and_renormalizes():
+    mu = pd.Series({"A": 0.05, "B": 0.08, "CASH": 0.0001})
+    cov = pd.DataFrame(
+        [[0.04, 0.01, 0.0], [0.01, 0.09, 0.0], [0.0, 0.0, 1e-5]],
+        index=["A", "B", "CASH"],
+        columns=["A", "B", "CASH"],
+    )
+    w = max_sharpe(mu, cov, CFG, exclude=["CASH"])
+    assert w["CASH"] == 0.0
+    _assert_valid_weights(w)
+
+
+def test_max_sharpe_exclude_none_matches_default_behavior(synthetic_returns):
+    mu = mean_returns(synthetic_returns)
+    cov = covariance_matrix(synthetic_returns)
+    w_default = max_sharpe(mu, cov, CFG)
+    w_explicit_none = max_sharpe(mu, cov, CFG, exclude=None)
+    pd.testing.assert_series_equal(w_default, w_explicit_none)
+
+
 def test_gmv_respects_constraints(synthetic_returns):
     cov = covariance_matrix(synthetic_returns)
     _assert_valid_weights(gmv(cov, CFG))

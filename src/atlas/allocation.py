@@ -13,6 +13,12 @@ expected-return vector, replacing every naive additive-tilt
 combination used since stage 3 (PROJECT_STRUCTURE.md 5.1: "until here,
 views can combine naively; BL formalizes it").
 
+Stage 11 addition: max_sharpe's `exclude` parameter. rf=0 combined
+with a near-zero-vol cash proxy makes the max-Sharpe objective
+degenerate (cash's implied Sharpe is enormous regardless of its actual
+expected return), pulling the book toward cash by construction of the
+objective, not because of any view -- see max_sharpe's docstring.
+
 All functions return pd.Series of weights indexed by ticker:
 weights >= 0, sum to 1. Constraints (long-only, per-asset cap) come
 from config; covariance from Ledoit-Wolf shrinkage by default.
@@ -20,7 +26,7 @@ from config; covariance from Ledoit-Wolf shrinkage by default.
 Public API (stage 2):
     mean_returns(returns) -> pd.Series
     covariance_matrix(returns, method) -> pd.DataFrame
-    max_sharpe(mu, cov, cfg) -> weights           # SLSQP (S2/S3)
+    max_sharpe(mu, cov, cfg, rf=0.0, exclude=None) -> weights  # SLSQP (S2/S3)
     gmv(cov, cfg) -> weights                      # S5
     risk_parity(cov, cfg) -> weights              # S5 risk contributions
     hrp(returns, cfg) -> weights                  # S4 dendrogram
@@ -90,18 +96,35 @@ def _renormalize(x: np.ndarray, tickers: pd.Index) -> pd.Series:
 
 
 def max_sharpe(
-    mu: pd.Series, cov: pd.DataFrame, cfg: dict, rf: float = 0.0
+    mu: pd.Series,
+    cov: pd.DataFrame,
+    cfg: dict,
+    rf: float = 0.0,
+    exclude: list[str] | None = None,
 ) -> pd.Series:
-    """Max-Sharpe weights via SLSQP (S2/S3)."""
+    """Max-Sharpe weights via SLSQP (S2/S3).
+
+    `exclude`, if given, removes those tickers from the optimization
+    universe entirely (weight forced to 0 in the returned Series,
+    still indexed over all of `mu`). Use this for a near-zero-vol cash
+    proxy: at rf=0, cash's implied Sharpe in this objective is
+    enormous regardless of its actual expected return, so the
+    optimizer piles into it up to the per-asset cap by construction of
+    the objective, not because of any view (stage 11 finding). GMV and
+    Risk Parity don't have this degeneracy (their objectives reward
+    low vol directly, not a return/vol ratio against rf=0) and are
+    left free to hold cash as a genuine defensive asset.
+    """
     tickers = mu.index
-    cov = cov.loc[tickers, tickers].values
-    mu_vals = mu.values
+    active = tickers.difference(exclude) if exclude else tickers
+    cov_vals = cov.loc[active, active].values
+    mu_vals = mu.loc[active].values
     cap = cfg["constraints"]["per_asset_cap"]
-    n = len(tickers)
+    n = len(active)
 
     def neg_sharpe(w: np.ndarray) -> float:
         ret = w @ mu_vals - rf
-        vol = np.sqrt(w @ cov @ w)
+        vol = np.sqrt(w @ cov_vals @ w)
         return 0.0 if vol < 1e-12 else -ret / vol
 
     result = minimize(
@@ -111,7 +134,8 @@ def max_sharpe(
         bounds=[(0.0, cap)] * n,
         constraints=(_sum_to_one(),),
     )
-    return _renormalize(result.x, tickers)
+    weights = _renormalize(result.x, active)
+    return weights.reindex(tickers).fillna(0.0)
 
 
 def gmv(cov: pd.DataFrame, cfg: dict) -> pd.Series:
