@@ -21,12 +21,22 @@ universe:
 rebalance:
   frequency: weekly                # decision Friday close, execute next trading day
   transaction_cost_bps: 10
-  max_weekly_turnover: 0.01        # frozen by stage 9's IS-only grid search
-                                    # (notebook 09): highest cross-fold
-                                    # stability score among the grid, though
-                                    # scores were closely clustered
-  no_trade_band: 0.01              # frozen alongside max_weekly_turnover,
-                                    # same stage-9 grid search
+  max_weekly_turnover: 0.02        # S4-convention risk-control POLICY, not a
+                                    # tunable parameter: stage 9's stability-
+                                    # penalized grid froze this at 0.01 with
+                                    # no_trade_band also 0.01 (band == cap
+                                    # collapses every rebalance to "trade
+                                    # exactly 1% or freeze," throttling every
+                                    # upstream signal). Stage 11's ablation
+                                    # confirmed relaxing back to 2% raises OOS
+                                    # Sharpe 0.806 -> 0.875 with no drawdown
+                                    # cost (REVIEW.md 2.1/6.3): a stability
+                                    # criterion applied to the risk cap itself
+                                    # will always buy stability with paralysis,
+                                    # so the cap is set by policy, not the grid.
+  no_trade_band: 0.005              # strictly below the cap (S4 convention),
+                                    # so "trade toward target" and "freeze"
+                                    # remain distinct regimes
 
 constraints:
   long_only: true
