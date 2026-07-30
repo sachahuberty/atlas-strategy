@@ -47,7 +47,15 @@ constraints:
 modules:                           # ablation on/off flags
   regime_view: true                # V1
   meanreversion_view: true         # V2
-  technical_view: true             # V3 (price levels; options part live-only)
+  technical_view: false            # V3 (price levels; options part live-only):
+                                    # stage 11's ablation (notebook 11) measured
+                                    # a marginal OOS Sharpe contribution of
+                                    # -0.265, the largest effect (in the wrong
+                                    # direction) of any module in the study --
+                                    # see DIAGNOSTIC.md Sec 0/1.2. Disabled per
+                                    # that measurement, not a guess. The module
+                                    # and its tests are kept intact as a
+                                    # documented negative result, not deleted.
   sentiment_view: true             # V4
   anomaly_override: true
   execution_timing: true
