@@ -6,6 +6,7 @@ the technical tilt + phase flags (stage 6), the sentiment tilt
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from atlas import (
     allocation,
@@ -704,9 +705,9 @@ def test_black_litterman_strategy_offers_three_candidates_to_utility_select(
     captured = {}
     original = allocation.utility_select
 
-    def spy(candidates, mu, cov, risk_aversion):
+    def spy(candidates, mu, cov, risk_aversion, **kwargs):
         captured["keys"] = set(candidates.keys())
-        return original(candidates, mu, cov, risk_aversion)
+        return original(candidates, mu, cov, risk_aversion, **kwargs)
 
     monkeypatch.setattr(allocation, "utility_select", spy)
 
@@ -717,3 +718,117 @@ def test_black_litterman_strategy_offers_three_candidates_to_utility_select(
     strategy_fn(returns.index[-1], returns)
 
     assert captured["keys"] == {"black_litterman", "gmv", "risk_parity"}
+
+
+def test_black_litterman_strategy_overrides_cash_prior_with_rf(monkeypatch):
+    captured = {}
+    original = allocation.black_litterman
+
+    def spy(prior, cov, P, Q, Omega, tau):
+        captured["prior"] = prior.copy()
+        return original(prior, cov, P, Q, Omega, tau)
+
+    monkeypatch.setattr(allocation, "black_litterman", spy)
+
+    returns = _iid_returns()
+    rf_series = pd.Series(0.04, index=returns.index)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["prior"]["BIL"] == pytest.approx(0.04)
+
+
+def test_black_litterman_strategy_defaults_rf_to_zero_without_rf_series(
+    monkeypatch,
+):
+    captured = {}
+    original = allocation.black_litterman
+
+    def spy(prior, cov, P, Q, Omega, tau):
+        captured["prior"] = prior.copy()
+        return original(prior, cov, P, Q, Omega, tau)
+
+    monkeypatch.setattr(allocation, "black_litterman", spy)
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["prior"]["BIL"] == 0.0
+
+
+def test_black_litterman_strategy_rf_lookup_ignores_future_values(
+    monkeypatch,
+):
+    # A no-lookahead canary for the rf lookup: rf_series contains a
+    # future rate change well after the decision date, but the
+    # decision must only see what was prevailing at (or before) as_of.
+    captured = []
+    original = allocation.black_litterman
+
+    def spy(prior, cov, P, Q, Omega, tau):
+        captured.append(prior.copy())
+        return original(prior, cov, P, Q, Omega, tau)
+
+    monkeypatch.setattr(allocation, "black_litterman", spy)
+
+    returns = _iid_returns()
+    change_date = returns.index[900]
+    rf_series = pd.Series(0.01, index=returns.index)
+    rf_series.loc[change_date:] = 0.05
+
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+    )
+    earlier_date = returns.index[700]
+    strategy_fn(earlier_date, returns.loc[:earlier_date])
+
+    assert captured[-1]["BIL"] == pytest.approx(0.01)
+
+
+def test_black_litterman_strategy_rf_defaults_zero_before_series_start(
+    monkeypatch,
+):
+    captured = {}
+    original = allocation.black_litterman
+
+    def spy(prior, cov, P, Q, Omega, tau):
+        captured["prior"] = prior.copy()
+        return original(prior, cov, P, Q, Omega, tau)
+
+    monkeypatch.setattr(allocation, "black_litterman", spy)
+
+    returns = _iid_returns()
+    rf_series = pd.Series(0.03, index=returns.index[500:])
+
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+    )
+    early_date = returns.index[100]
+    strategy_fn(early_date, returns.loc[:early_date])
+
+    assert captured["prior"]["BIL"] == 0.0
+
+
+def test_black_litterman_strategy_passes_rf_to_utility_select(monkeypatch):
+    captured = {}
+    original = allocation.utility_select
+
+    def spy(candidates, mu, cov, risk_aversion, **kwargs):
+        captured["rf"] = kwargs.get("rf")
+        return original(candidates, mu, cov, risk_aversion, **kwargs)
+
+    monkeypatch.setattr(allocation, "utility_select", spy)
+
+    returns = _iid_returns()
+    rf_series = pd.Series(0.045, index=returns.index)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["rf"] == pytest.approx(0.045)

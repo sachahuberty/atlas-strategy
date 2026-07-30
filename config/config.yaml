@@ -8,6 +8,16 @@ general:
   oos_start_date: "2022-01-01"    # out-of-sample walk-forward begins here
   random_seed: 42
 
+risk_free:
+  fred_series: DTB3               # 13-week T-bill, secondary market rate
+                                   # (annualized %, daily). Priced into the
+                                   # cash bucket's equilibrium prior and
+                                   # threaded through sharpe/utility/
+                                   # max_sharpe as rf, fixing the rf=0 cash
+                                   # degeneracy at its source (stage 11,
+                                   # DIAGNOSTIC.md Sec 2.3/6 action 3)
+                                   # instead of excluding the asset.
+
 universe:
   candidate_pool_file: null        # optional CSV of candidate tickers; null = built-in pool
   min_history_years: 8

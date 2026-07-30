@@ -33,7 +33,7 @@ Public API (stage 2):
     tracking_error_min(cov, benchmark, cfg) -> weights   # S2
     efficient_frontier(mu, cov, cfg) -> pd.DataFrame     # S2/S3
     permanent(class_bucket) / sixty_forty(class_bucket) -> weights
-    utility_select(candidates, mu, cov, risk_aversion) -> (name, weights)
+    utility_select(candidates, mu, cov, risk_aversion, rf=0.0) -> (name, w)
     cap_and_renormalize(weights, cap) -> weights   # waterfall re-cap, reused
                                                     # by hrp and every tilt
 
@@ -390,15 +390,18 @@ def utility_select(
     mu: pd.Series,
     cov: pd.DataFrame,
     risk_aversion: float,
+    rf: float = 0.0,
 ) -> tuple[str, pd.Series]:
     """Pick the candidate book with the highest mean-variance utility
-    U = E[r] - 0.5*A*sigma^2 (S1/S3)."""
+    U = (E[r] - rf) - 0.5*A*sigma^2 (S1/S3). `rf` defaults to 0
+    (compares on total return); pass the prevailing risk-free rate to
+    compare candidates on excess return instead."""
     best_name, best_utility, best_weights = None, -np.inf, None
     for name, weights in candidates.items():
         w = weights.reindex(mu.index).fillna(0.0)
         exp_ret = float(w @ mu)
         vol = portfolio_vol(w, cov)
-        u = utility(exp_ret, vol, risk_aversion)
+        u = utility(exp_ret, vol, risk_aversion, rf=rf)
         if u > best_utility:
             best_name, best_utility, best_weights = name, u, w
     return best_name, best_weights

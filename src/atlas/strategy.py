@@ -350,6 +350,7 @@ def black_litterman_strategy(
     cfg: dict,
     posture_cfg: dict,
     market_ticker: str | None = None,
+    rf_series: pd.Series | None = None,
 ) -> StrategyFn:
     """Build a `backtest.run`-compatible strategy_fn implementing the
     full Black-Litterman fusion pipeline (S4, stage 8):
@@ -357,29 +358,38 @@ def black_litterman_strategy(
     1. Detect the HMM posture (same guard/fallback pattern as
        regime_switching_strategy).
     2. Equilibrium prior Pi from `permanent()`'s asset-class weights
-       (notebook 08: "equilibrium returns from asset-class weights").
+       (notebook 08: "equilibrium returns from asset-class weights"),
+       with the `cash` bucket's entry overridden by the prevailing
+       risk-free rate (see `rf_series` below) rather than Pi's near-
+       zero implied return for a zero-covariance asset.
     3. V1 (regime posture -> asset-class view), V2 (mean-reversion),
        V3 (technical) each contribute views; V4 (sentiment) is
        omitted here -- still live-only (see sentiment.py).
     4. Fuse into mu_BL via Black-Litterman.
-    5. max_sharpe(mu_BL, Sigma) is the primary book; GMV and Risk
+    5. max_sharpe(mu_BL, Sigma, rf) is the primary book; GMV and Risk
        Parity are defensive/fallback books; utility_select (using
-       mu_BL for all three) picks whichever wins.
+       mu_BL and rf for all three) picks whichever wins.
+
+    `rf_series`, if given, is an annual risk-free rate indexed by
+    date (e.g. FRED DTB3/100); the prevailing rate as of each `as_of`
+    (via `.asof`, so never a future value) is used as `rf` throughout
+    this week's decision. Defaults to a constant 0.0 (the stage 1-10
+    total-return convention) if omitted.
 
     Stage-11 note: an earlier version of this function excluded the
-    `cash` bucket from max_sharpe's universe (rf=0 makes a near-zero-
-    vol cash proxy degenerate in a Sharpe objective, regardless of its
-    actual expected return -- see allocation.max_sharpe's docstring for
-    that degeneracy, which is still real). That exclusion was reverted:
-    a gate census (DIAGNOSTIC.md Sec 0/2.3) showed cash was not merely
-    riding the Sharpe degeneracy, it was the *variance anchor* that let
-    the max_sharpe book clear the utility gate at all -- with cash
+    `cash` bucket from max_sharpe's universe entirely (rf=0 makes a
+    near-zero-vol cash proxy degenerate in a Sharpe objective,
+    regardless of its actual expected return -- see
+    allocation.max_sharpe's docstring for that degeneracy, which is
+    still real). That exclusion was reverted: a gate census
+    (DIAGNOSTIC.md Sec 0/2.3) showed cash was not merely riding the
+    Sharpe degeneracy, it was the *variance anchor* that let the
+    max_sharpe book clear the utility gate at all -- with cash
     allowed, the BL book won the gate 239/239 OOS weeks; with cash
     excluded, 0/239 (the pipeline silently became plain GMV every
-    week). Removing the asset was the wrong remedy. The correct one is
-    pricing cash properly via a real risk-free rate rather than the
-    equilibrium prior's near-zero implied return for a zero-covariance
-    asset -- a follow-up change, not yet made here.
+    week). Removing the asset was the wrong remedy; pricing it
+    properly via `rf_series` fixes the degeneracy at its source
+    without deleting the variance anchor the gate depends on.
     """
     lookback = cfg["optimization"]["lookback_days"]
     cov_method = cfg["optimization"]["covariance"]
@@ -387,8 +397,17 @@ def black_litterman_strategy(
     bcfg = cfg["black_litterman"]
     risk_aversion = bcfg["risk_aversion_for_utility_gate"]
     market_weights = allocation.permanent(class_bucket)
+    cash_tickers = class_bucket[class_bucket == "cash"].index
 
     def strategy_fn(as_of: pd.Timestamp, window: pd.DataFrame) -> pd.Series:
+        rf = 0.0
+        if rf_series is not None:
+            # .asof never looks past as_of; NaN before rf_series' own
+            # start (e.g. a cold-start week) falls back to 0.0 rather
+            # than propagating a NaN through mu_bl/utility.
+            looked_up = rf_series.asof(as_of)
+            if pd.notna(looked_up):
+                rf = float(looked_up)
         market_returns = window[market_ticker]
         if not regimes.has_enough_history(market_returns, cfg):
             posture = "neutral"
@@ -408,6 +427,13 @@ def black_litterman_strategy(
         prior = allocation.equilibrium_returns(
             market_weights.reindex(tickers).fillna(0.0), cov, bcfg["delta"]
         )
+        # Pi is ~0 for cash by construction (near-zero covariance with
+        # everything), regardless of the prevailing rate -- overriding
+        # it with the actual risk-free rate is what fixes the cash
+        # degeneracy at its source (see docstring).
+        priced_cash = cash_tickers.intersection(tickers)
+        if len(priced_cash) > 0:
+            prior.loc[priced_cash] = rf
 
         prices = (1.0 + window).cumprod()
         if meanreversion.has_enough_history(prices, cfg):
@@ -437,12 +463,12 @@ def black_litterman_strategy(
         )
 
         candidates = {
-            "black_litterman": allocation.max_sharpe(mu_bl, cov, cfg),
+            "black_litterman": allocation.max_sharpe(mu_bl, cov, cfg, rf=rf),
             "gmv": allocation.gmv(cov, cfg),
             "risk_parity": allocation.risk_parity(cov, cfg),
         }
         _, selected = allocation.utility_select(
-            candidates, mu_bl, cov, risk_aversion
+            candidates, mu_bl, cov, risk_aversion, rf=rf
         )
         return selected
 

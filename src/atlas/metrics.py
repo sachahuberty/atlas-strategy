@@ -8,7 +8,8 @@ Public API:
     max_drawdown, drawdown_series, hit_rate
     portfolio_return(weights, returns), portfolio_vol(weights, cov)
     turnover(weights_t, weights_t_minus_1)
-    utility(exp_ret, vol, risk_aversion)  # U = E[r] - 0.5*A*sigma^2 (S1/S3)
+    utility(exp_ret, vol, risk_aversion, rf=0.0)  # U = (E[r]-rf) -
+                                                   # 0.5*A*sigma^2 (S1/S3)
 """
 
 from __future__ import annotations
@@ -40,10 +41,14 @@ def ann_vol(
 
 def sharpe(
     returns: pd.Series,
-    rf: float = 0.0,
+    rf: float | pd.Series = 0.0,
     periods_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> float:
-    """Annualized Sharpe ratio. `rf` is an annual risk-free rate."""
+    """Annualized Sharpe ratio. `rf` is an annual risk-free rate: a
+    scalar (the stage 1-10 default, `rf=0.0`, giving a total-return
+    Sharpe), or a `pd.Series` of annual rates already aligned to
+    `returns.index` (e.g. a daily T-bill yield, for an excess-return
+    Sharpe) -- pandas broadcasts either case identically below."""
     excess = returns - rf / periods_per_year
     vol = excess.std(ddof=1)
     # Floating-point noise can leave std() slightly above zero even for a
@@ -132,6 +137,11 @@ def turnover(weights_t: pd.Series, weights_t_minus_1: pd.Series) -> float:
     return 0.5 * (w_t - w_prev).abs().sum()
 
 
-def utility(exp_ret: float, vol: float, risk_aversion: float) -> float:
-    """Mean-variance utility: U = E[r] - 0.5 * A * sigma^2 (S1/S3)."""
-    return exp_ret - 0.5 * risk_aversion * vol ** 2
+def utility(
+    exp_ret: float, vol: float, risk_aversion: float, rf: float = 0.0
+) -> float:
+    """Mean-variance utility on excess return: U = (E[r] - rf) -
+    0.5 * A * sigma^2 (S1/S3). `rf` defaults to 0 (total-return
+    utility) for backward compatibility; pass the prevailing
+    risk-free rate to compare candidates on their excess return."""
+    return (exp_ret - rf) - 0.5 * risk_aversion * vol ** 2
