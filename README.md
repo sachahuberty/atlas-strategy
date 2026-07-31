@@ -38,74 +38,128 @@ pytest
 
 ## Results
 
-Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09), after
-all three of stage 11's priority-2 fixes (V2 unit mismatch, turnover
-cap restored to the S4 policy, cash excluded from `max_sharpe`'s
-universe). **Development-set OOS, not virgin OOS** -- see the caveat
-below the table; with ~4.5 years of daily data the standard error on
-a Sharpe estimate is roughly ±0.22, so most rows here are within one
-SE of each other and should not be read as a confident ranking.
+Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09),
+current state after DIAGNOSTIC.md's Tier-1 fixes (V3 disabled, cash
+exclusion reverted, a real risk-free rate). **Development-set OOS, not
+virgin OOS** -- with ~4.5 years of daily data the standard error on a
+Sharpe estimate is roughly ±0.22, so most rows here are within one SE
+of each other and should not be read as a confident ranking.
 
-| Strategy | Sharpe | Max drawdown | Ann. vol |
-| --- | --- | --- | --- |
-| permanent | 1.07 ± 0.22 | -12.6% | 8.3% |
-| hrp | 0.82 ± 0.22 | -9.2% | 3.5% |
-| risk_parity | 0.81 ± 0.22 | -16.5% | 9.8% |
-| black_litterman (frozen) | 0.73 ± 0.22 | -8.7% | 4.5% |
-| gmv | 0.74 ± 0.22 | -8.1% | 3.2% |
-| max_sharpe_static | 0.60 ± 0.22 | -13.6% | 5.5% |
-| sixty_forty | 0.57 ± 0.22 | -22.5% | 11.5% |
+| Strategy | Sharpe | Excess Sharpe (vs. T-bill) | Max drawdown | Ann. vol |
+| --- | --- | --- | --- | --- |
+| permanent | 1.07 ± 0.22 | 0.59 | -12.6% | 8.3% |
+| risk_parity | 0.81 ± 0.22 | 0.41 | -16.5% | 9.8% |
+| sixty_forty | 0.57 ± 0.22 | 0.22 | -22.5% | 11.5% |
+| max_sharpe_static | 0.60 ± 0.22 | -0.12 | -13.6% | 5.5% |
+| hrp | 0.82 ± 0.22 | -0.31 | -9.2% | 3.5% |
+| **black_litterman (frozen)** | **0.74 ± 0.22** | **-0.51** | -8.1% | 4.5% |
+| gmv | 0.74 ± 0.22 | -0.51 | -8.1% | 3.2% |
 
-The naive `permanent` benchmark still posts the best OOS Sharpe. Three
-changes were made in sequence, each re-validated by re-running the
-full frozen OOS walk-forward, and each reported honestly regardless of
-which direction it moved the number:
+`black_litterman` and `gmv` are numerically identical -- the gate is
+selecting GMV every week (see below). **On an excess-return basis
+(net of the T-bill rate, which averaged ~3-4% through this window),
+neither ATLAS nor plain GMV nor HRP beat cash at all** -- their
+excess Sharpes are negative. Only `permanent`, `risk_parity`, and
+`sixty_forty` cleared that bar. This is a materially different, more
+sobering picture than the total-return Sharpes alone show, and it was
+missing from this README until DIAGNOSTIC.md's audit flagged it
+(§5.2 item 2).
 
-- **V2 unit-mismatch fix: did not improve Sharpe** (0.8348, vs. 0.8564
-  pre-fix). Once mean-reversion's view is correctly scaled to be
-  comparable to the other view families (it previously entered
-  Black-Litterman at roughly 1/100th the intended magnitude), its net
-  contribution in this OOS window is still marginally negative --
-  consistent with stage 5's own event study, which found reversion
-  hit rates above chance for some assets and below chance for others.
-- **Turnover cap restored to the S4 convention (2%, from stage 9's
-  grid-frozen 1% where the no-trade band equaled the cap): the single
-  largest improvement in the project's history, Sharpe rising from
-  0.8348 to 0.8969**, with max drawdown also improving slightly. Stage
-  11's ablation had flagged this precisely in advance: a stability-
-  penalized grid applied to a risk-control cap will always buy
-  stability with paralysis, regardless of signal quality.
-- **Cash excluded from `max_sharpe`'s universe: made performance
-  meaningfully worse** (Sharpe 0.7265, down from 0.8969), the opposite
-  of the initial hypothesis that this would "un-mute" risk-taking. A
-  targeted diagnostic traced the mechanism: with cash available,
-  `max_sharpe` could sometimes build a moderate, cash-anchored book
-  that won the utility gate over GMV/Risk Parity outright; once
-  excluded, that book lost those comparisons more often and the
-  pipeline defaulted to GMV (a pure minimum-variance book with no
-  return view) more frequently instead. The fix is kept regardless --
-  the underlying degeneracy (rf=0 makes a near-zero-vol asset
-  pathologically attractive in a Sharpe objective) is real independent
-  of whether removing it helps this particular backtest -- but the
-  result argues the fix should go further (e.g. re-deriving the
-  equilibrium prior or utility gate with cash held out from the
-  start), not stop here.
+### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
+
+Every entry below is kept regardless of which direction it moved the
+number -- **the measured V3 regression, the V2 result, and the
+cash-exclusion regression are the most valuable evidence in this
+project**, not failures to edit out.
+
+1. **V2 unit-mismatch fix: did not improve Sharpe** (0.8348, vs. 0.8564
+   pre-fix). Once mean-reversion's view is correctly scaled to be
+   comparable to the other view families, its net contribution is
+   still marginally negative -- consistent with stage 5's own event
+   study, which found reversion hit rates above chance for some
+   assets and below chance for others.
+2. **Turnover cap restored to the S4 convention (2%, from stage 9's
+   grid-frozen 1% where the no-trade band equaled the cap): the
+   single largest improvement up to that point, Sharpe rising from
+   0.8348 to 0.8969.** Stage 11's ablation had flagged this precisely
+   in advance: a stability-penalized grid applied to a risk-control
+   cap will always buy stability with paralysis.
+3. **Cash excluded from `max_sharpe`'s universe (REVIEW.md's
+   recommendation): made performance meaningfully worse** (Sharpe
+   0.7265, down from 0.8969) -- the opposite of the hypothesis that
+   this would "un-mute" risk-taking. A gate census proved the
+   mechanism: cash wasn't just riding a Sharpe-ratio degeneracy, it
+   was the *variance anchor* that let the max-Sharpe book win the
+   utility gate at all. With cash allowed, it won 239/239 OOS weeks;
+   excluded, 0/239 -- the whole pipeline silently became plain GMV.
+4. **DIAGNOSTIC.md Tier 1 (independently re-derived from the repo's
+   own cached data, not the notebooks): V3 disabled** (`modules.
+   technical_view: false`, measured -0.265 marginal Sharpe, the
+   largest effect of any module) **and the cash exclusion from step 3
+   reverted** -- it was the wrong remedy; the right one is pricing
+   cash properly.
+5. **A real risk-free rate (FRED DTB3) replaces `rf=0` throughout:**
+   threaded into `sharpe`, `utility`, `max_sharpe`, and overriding the
+   cash bucket's equilibrium prior (which was ~0.1%/yr by construction
+   for a near-zero-covariance asset, versus BIL's realized ~3.9%/yr).
+   This fixes the cash degeneracy at its mathematical source instead
+   of deleting the asset.
+
+**Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
+before any of these three fixes, and identical to plain GMV.** A
+direct gate census with the fixed pipeline (16 sampled OOS weeks)
+confirms why: **GMV still wins the utility gate 16/16 times.** Cash
+is no longer degenerately attractive (its weight inside the max-Sharpe
+book now ranges ~1-20% instead of being pinned to the cap), but the
+max-Sharpe book's return advantage still doesn't overcome its higher
+variance under the gate's quadratic risk-aversion penalty (A=5).
+DIAGNOSTIC.md's own diagnosis anticipated this exactly: *"the gate is
+not a safety net on the optimizer -- it is a second, stricter
+optimizer that always prefers minimum variance... you have two
+conflicting objective functions in series, and the second one wins
+every time."* Tier 1 was worth doing on its own merits (V3 is a real,
+measured negative contributor; cash is now priced correctly rather
+than by mathematical accident), but it was **not sufficient** to move
+the headline number -- the utility gate itself is the confirmed
+bottleneck, and re-scoping it (DIAGNOSTIC.md Tier 2) is the next,
+not-yet-applied step.
+
+### The benchmark comparison itself is window-dependent
+
+Re-running `permanent` and GMV over the **in-sample** period
+(2013-2021, never used to design either) reframes the entire question
+(DIAGNOSTIC.md §5.3):
+
+| Strategy | 2013-2021 (IS) | 2022-2026 (OOS) |
+| --- | --- | --- |
+| permanent | **0.476** | 1.067 |
+| GMV (= what ATLAS currently is) | **1.018** | 0.734 |
+
+Permanent's OOS lead is not a stable property of the benchmark -- it
+is a property of *this specific window* (a commodity spike, ~5% cash
+yields, and an equity bull market all landed in 2022-2026). Over
+2013-2021, the minimum-variance posture ATLAS has converged to scored
+*better* than Permanent, 1.018 vs. 0.476. Neither number should be
+read as "the" answer; judged against a single lucky or unlucky draw,
+either strategy can look definitively better. This does not excuse
+the utility-gate finding above, but it means the honest headline is
+"ATLAS currently behaves like a minimum-variance book, which wins in
+some regimes and loses in others" rather than "ATLAS loses to
+Permanent."
 
 Grid-searching mean-reversion parameters IS-only, selected for
 cross-fold stability, remains in place (`meanreversion.lookback_days=20`);
 turnover parameters are no longer grid-selected -- see `config.yaml`'s
-`rebalance` section and notebook 09's addenda for the full reasoning
-and per-fix numbers.
+`rebalance` section and notebook 09's addenda for the full history and
+every intermediate number.
 
 **On statistical significance:** every Sharpe above carries an
 estimated standard error of roughly ±0.22 (0.5/√4.5 years of daily
-data) purely from sampling noise. `permanent`'s apparent lead over
-every active strategy, and the differences between `black_litterman`,
-`risk_parity`, `hrp`, and `gmv`, are not statistically distinguishable
-at this sample size -- this table should be read as a set of plausible
-outcomes clustered around a similar Sharpe, not a confident ranking.
-Full per-quarter breakdown and methodology notes in
-`notebooks/09_strategy_backtest.ipynb`.
+data) purely from sampling noise. This table should be read as a set
+of plausible outcomes clustered around a similar Sharpe, not a
+confident ranking. Full per-quarter breakdown and methodology notes
+in `notebooks/09_strategy_backtest.ipynb`; the full evidence-based
+diagnosis is in `DIAGNOSTIC.md`.
 
 **Stage 10 forward-looking risk report** (notebook 10), on the current
 book as of 2026-07-24: historical stress through 2008/2020/2022 shows
