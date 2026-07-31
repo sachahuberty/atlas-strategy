@@ -367,8 +367,18 @@ def black_litterman_strategy(
        omitted here -- still live-only (see sentiment.py).
     4. Fuse into mu_BL via Black-Litterman.
     5. max_sharpe(mu_BL, Sigma, rf) is the primary book; GMV and Risk
-       Parity are defensive/fallback books; utility_select (using
-       mu_BL and rf for all three) picks whichever wins.
+       Parity are defensive/fallback books; `cfg["black_litterman"]
+       ["gate"]` picks whichever wins:
+       - "utility" (default): mean-variance utility_select (using
+         mu_BL and rf for all three candidates).
+       - "off": always the max_sharpe book, no gating at all.
+       - "vol_floor": the max_sharpe book unless its volatility
+         exceeds `vol_floor_multiplier` x GMV's volatility, in which
+         case GMV. A simple risk-budget gate instead of a quadratic
+         utility comparison, which structurally favors minimum
+         variance regardless of signal quality (DIAGNOSTIC.md Sec 3;
+         stage 11's gate ablation, notebook 11, measured the "off"
+         and A-sensitivity arms before this option was added).
 
     `rf_series`, if given, is an annual risk-free rate indexed by
     date (e.g. FRED DTB3/100); the prevailing rate as of each `as_of`
@@ -467,9 +477,25 @@ def black_litterman_strategy(
             "gmv": allocation.gmv(cov, cfg),
             "risk_parity": allocation.risk_parity(cov, cfg),
         }
-        _, selected = allocation.utility_select(
-            candidates, mu_bl, cov, risk_aversion, rf=rf
-        )
+
+        gate = bcfg["gate"]
+        if gate == "off":
+            selected = candidates["black_litterman"]
+        elif gate == "vol_floor":
+            bl_vol = allocation.portfolio_vol(
+                candidates["black_litterman"], cov
+            )
+            gmv_vol = allocation.portfolio_vol(candidates["gmv"], cov)
+            if bl_vol <= gmv_vol * bcfg["vol_floor_multiplier"]:
+                selected = candidates["black_litterman"]
+            else:
+                selected = candidates["gmv"]
+        elif gate == "utility":
+            _, selected = allocation.utility_select(
+                candidates, mu_bl, cov, risk_aversion, rf=rf
+            )
+        else:
+            raise ValueError(f"Unknown black_litterman.gate: {gate!r}")
         return selected
 
     return strategy_fn

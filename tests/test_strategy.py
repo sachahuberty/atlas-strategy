@@ -4,6 +4,8 @@ the technical tilt + phase flags (stage 6), the sentiment tilt
 (stage 7), and the Black-Litterman fusion strategy (stage 8).
 """
 
+import copy
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -620,6 +622,8 @@ BL_CFG = {
         "delta": 2.5,
         "regime_view_magnitude": 0.03,
         "risk_aversion_for_utility_gate": 5,
+        "gate": "utility",
+        "vol_floor_multiplier": 1.5,
         "view_confidence": {
             "regime": 1.0,
             "meanreversion": 0.8,
@@ -832,3 +836,85 @@ def test_black_litterman_strategy_passes_rf_to_utility_select(monkeypatch):
     strategy_fn(returns.index[-1], returns)
 
     assert captured["rf"] == pytest.approx(0.045)
+
+
+def test_black_litterman_strategy_gate_off_bypasses_utility_select(
+    monkeypatch,
+):
+    called = {"utility_select": False}
+    original = allocation.utility_select
+
+    def spy(*args, **kwargs):
+        called["utility_select"] = True
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(allocation, "utility_select", spy)
+
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["gate"] = "off"
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert not called["utility_select"]
+    assert weights.sum() == pytest.approx(1.0)
+
+
+def test_black_litterman_strategy_gate_vol_floor(monkeypatch):
+    # Distinct, easily-identifiable sentinel weight vectors so the
+    # gate's choice can be read straight off the returned weights,
+    # rather than needing to reason about the real BL/GMV solution.
+    bl_sentinel = pd.Series({"ACWI": 0.9, "AGG": 0.0, "GLD": 0.0, "BIL": 0.1})
+    gmv_sentinel = pd.Series({"ACWI": 0.1, "AGG": 0.3, "GLD": 0.3, "BIL": 0.3})
+    monkeypatch.setattr(
+        allocation, "max_sharpe", lambda *a, **k: bl_sentinel.copy()
+    )
+    monkeypatch.setattr(allocation, "gmv", lambda *a, **k: gmv_sentinel.copy())
+
+    returns = _iid_returns()
+    lookback = BL_CFG["optimization"]["lookback_days"]
+    recent = returns.tail(lookback)
+    cov = allocation.covariance_matrix(
+        recent, method=BL_CFG["optimization"]["covariance"]
+    )
+    bl_vol = allocation.portfolio_vol(bl_sentinel, cov)
+    gmv_vol = allocation.portfolio_vol(gmv_sentinel, cov)
+    assert bl_vol > gmv_vol  # sanity check the sentinels differ as intended
+
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["gate"] = "vol_floor"
+
+    # Generous multiplier: BL's vol clears the floor -> BL selected.
+    cfg["black_litterman"]["vol_floor_multiplier"] = bl_vol / gmv_vol + 1.0
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    w = strategy_fn(returns.index[-1], returns)
+    pd.testing.assert_series_equal(
+        w.sort_index(), bl_sentinel.sort_index(), check_names=False
+    )
+
+    # Strict multiplier: BL's vol exceeds the floor -> falls back to GMV.
+    cfg["black_litterman"]["vol_floor_multiplier"] = bl_vol / gmv_vol - 0.1
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    w = strategy_fn(returns.index[-1], returns)
+    pd.testing.assert_series_equal(
+        w.sort_index(), gmv_sentinel.sort_index(), check_names=False
+    )
+
+
+def test_black_litterman_strategy_unknown_gate_raises():
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["gate"] = "not_a_real_gate"
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    with pytest.raises(ValueError, match="not_a_real_gate"):
+        strategy_fn(returns.index[-1], returns)

@@ -150,6 +150,17 @@ black_litterman:
   regime_view_magnitude: 0.03        # V1's asset-class-level return tilt
   risk_aversion_for_utility_gate: 5  # which of optimization.risk_aversion_levels
                                      # decides the BL-vs-defensive utility gate
+  gate: utility                     # "utility" (default, mean-variance
+                                     # comparison), "off" (always select the
+                                     # max_sharpe book, no gating), or
+                                     # "vol_floor" (reject max_sharpe only if
+                                     # its vol exceeds vol_floor_multiplier x
+                                     # GMV's vol). DIAGNOSTIC.md Sec 3: a
+                                     # quadratic utility penalty structurally
+                                     # favors minimum variance regardless of
+                                     # signal quality -- Tier 2 ablates this
+                                     # in notebook 11 before changing it here.
+  vol_floor_multiplier: 1.5         # only used when gate: vol_floor
   view_confidence:                 # per view family, relative scale
     regime: 1.0
     meanreversion: 0.8
