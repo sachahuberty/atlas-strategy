@@ -61,7 +61,19 @@ Public API (stage 7):
 
 Public API (stage 8):
     black_litterman_strategy(class_bucket, cfg, posture_cfg,
-                              market_ticker) -> strategy_fn
+                              market_ticker, rf_series) -> strategy_fn
+
+Public API (stage 11, Tier 2): bucket_black_litterman_strategy runs
+the same Black-Litterman/gate machinery on the four asset-class
+bucket portfolios instead of 22 individual assets (DIAGNOSTIC.md's
+most robust finding: with ~22 assets that are really 4-5 uncorrelated
+bets, per-asset covariance/return estimation is mostly noise). V1 is
+the only active view -- it is already asset-class-level, and the
+ablation's only positively-contributing module; V2/V3 have no natural
+bucket-level analog. Kept alongside, not instead of, the asset-level
+path so both can be compared on the same OOS window.
+    bucket_black_litterman_strategy(class_bucket, cfg, posture_cfg,
+                                     market_ticker, rf_series) -> strategy_fn
 """
 
 from __future__ import annotations
@@ -75,6 +87,7 @@ import tensorflow as tf
 from . import (
     allocation,
     anomaly,
+    buckets,
     meanreversion,
     regimes,
     sentiment,
@@ -345,6 +358,37 @@ def with_sentiment_view(
     return strategy_fn_with_sentiment
 
 
+def _select_gated_candidate(
+    candidates: dict[str, pd.Series],
+    mu_bl: pd.Series,
+    cov: pd.DataFrame,
+    bcfg: dict,
+    rf: float,
+) -> pd.Series:
+    """Shared gate-selection logic (S11 Tier 2) between the asset-
+    level and bucket-level Black-Litterman strategies: `bcfg["gate"]`
+    picks "utility" (mean-variance utility_select), "off" (always the
+    max_sharpe book), or "vol_floor" (max_sharpe unless its vol
+    exceeds `vol_floor_multiplier` x GMV's vol). See
+    black_litterman_strategy's docstring for the full rationale."""
+    gate = bcfg["gate"]
+    if gate == "off":
+        return candidates["black_litterman"]
+    if gate == "vol_floor":
+        bl_vol = allocation.portfolio_vol(candidates["black_litterman"], cov)
+        gmv_vol = allocation.portfolio_vol(candidates["gmv"], cov)
+        if bl_vol <= gmv_vol * bcfg["vol_floor_multiplier"]:
+            return candidates["black_litterman"]
+        return candidates["gmv"]
+    if gate == "utility":
+        risk_aversion = bcfg["risk_aversion_for_utility_gate"]
+        _, selected = allocation.utility_select(
+            candidates, mu_bl, cov, risk_aversion, rf=rf
+        )
+        return selected
+    raise ValueError(f"Unknown black_litterman.gate: {gate!r}")
+
+
 def black_litterman_strategy(
     class_bucket: pd.Series,
     cfg: dict,
@@ -405,7 +449,6 @@ def black_litterman_strategy(
     cov_method = cfg["optimization"]["covariance"]
     market_ticker = market_ticker or cfg["regimes"]["market_ticker"]
     bcfg = cfg["black_litterman"]
-    risk_aversion = bcfg["risk_aversion_for_utility_gate"]
     market_weights = allocation.permanent(class_bucket)
     cash_tickers = class_bucket[class_bucket == "cash"].index
 
@@ -477,25 +520,126 @@ def black_litterman_strategy(
             "gmv": allocation.gmv(cov, cfg),
             "risk_parity": allocation.risk_parity(cov, cfg),
         }
+        return _select_gated_candidate(candidates, mu_bl, cov, bcfg, rf)
 
-        gate = bcfg["gate"]
-        if gate == "off":
-            selected = candidates["black_litterman"]
-        elif gate == "vol_floor":
-            bl_vol = allocation.portfolio_vol(
-                candidates["black_litterman"], cov
-            )
-            gmv_vol = allocation.portfolio_vol(candidates["gmv"], cov)
-            if bl_vol <= gmv_vol * bcfg["vol_floor_multiplier"]:
-                selected = candidates["black_litterman"]
-            else:
-                selected = candidates["gmv"]
-        elif gate == "utility":
-            _, selected = allocation.utility_select(
-                candidates, mu_bl, cov, risk_aversion, rf=rf
-            )
+    return strategy_fn
+
+
+def bucket_black_litterman_strategy(
+    class_bucket: pd.Series,
+    cfg: dict,
+    posture_cfg: dict,
+    market_ticker: str | None = None,
+    rf_series: pd.Series | None = None,
+) -> StrategyFn:
+    """Black-Litterman fusion at the asset-CLASS-BUCKET level (S11
+    Tier 2, DIAGNOSTIC.md action 5) -- the same machinery as
+    `black_litterman_strategy`, run on the four bucket portfolios
+    (equity, fixed_income, commodity, cash: the same four
+    `allocation.permanent` uses) instead of 22 individual assets.
+
+    Rationale: with ~22 assets that are really 4-5 uncorrelated bets,
+    estimating a 22x22 covariance and 22 expected returns is mostly
+    estimating noise; collapsing to bucket-level estimation makes both
+    problems tractable (DIAGNOSTIC.md's most robust finding, measured
+    independently of this implementation at Sharpe 1.279 OOS / 0.885
+    IS / 1.036 full-period for a bucket-level book, vs. Permanent's
+    1.067 / 0.476 / 0.690 -- the only change that beat Permanent in
+    both windows).
+
+    Only V1 (regime posture) contributes a view: it is already asset-
+    class-level (so it needs no broadcasting/aggregation to fit this
+    universe) and is the only view with a positive marginal OOS
+    contribution in stage 11's ablation. V2/V3 are per-asset signals
+    with no natural bucket-level analog and are not applied here.
+
+    A bucket with zero equilibrium weight (`real_estate`, since
+    `allocation.permanent`/`sixty_forty` only reference four buckets)
+    is excluded from the bucket-level optimization entirely, matching
+    that existing asymmetry rather than silently fixing it here (see
+    DIAGNOSTIC.md Sec 5.2 item 4). The resulting bucket weights are
+    split equally across each bucket's member tickers
+    (`buckets.expand_bucket_weights`) before being returned, so this
+    strategy_fn is a drop-in, backtest.run-compatible replacement for
+    the asset-level path -- both can be run side by side on the same
+    OOS window for comparison.
+
+    Uses `constraints.per_class_cap` (not `per_asset_cap`) as the cap
+    on each bucket's weight -- a bucket is not a single concentrated
+    position the way an individual asset is, so the tighter per-asset
+    cap doesn't apply at this level of abstraction.
+    """
+    lookback = cfg["optimization"]["lookback_days"]
+    cov_method = cfg["optimization"]["covariance"]
+    market_ticker = market_ticker or cfg["regimes"]["market_ticker"]
+    bcfg = cfg["black_litterman"]
+
+    bucket_cfg = dict(cfg)
+    bucket_cfg["constraints"] = dict(cfg["constraints"])
+    bucket_cfg["constraints"]["per_asset_cap"] = cfg["constraints"][
+        "per_class_cap"
+    ]
+
+    market_weights_by_asset = allocation.permanent(class_bucket)
+    market_weights_bucket = market_weights_by_asset.groupby(class_bucket).sum()
+    active_buckets = market_weights_bucket[market_weights_bucket > 0]
+    active_buckets = active_buckets.index.tolist()
+    market_weights_bucket = market_weights_bucket.loc[active_buckets]
+    # V1's regime_view expects a class_bucket-shaped Series mapping
+    # each "asset" to its class; at this level each bucket IS its own
+    # class, so an identity mapping lets the existing, unmodified
+    # views.regime_view apply unchanged.
+    bucket_identity = pd.Series(active_buckets, index=active_buckets)
+
+    def strategy_fn(as_of: pd.Timestamp, window: pd.DataFrame) -> pd.Series:
+        rf = 0.0
+        if rf_series is not None:
+            looked_up = rf_series.asof(as_of)
+            if pd.notna(looked_up):
+                rf = float(looked_up)
+
+        market_returns = window[market_ticker]
+        if not regimes.has_enough_history(market_returns, cfg):
+            posture = "neutral"
         else:
-            raise ValueError(f"Unknown black_litterman.gate: {gate!r}")
-        return selected
+            try:
+                regime_result = regimes.market_regime(
+                    market_returns, cfg, posture_cfg
+                )
+                posture = regime_result["current_posture"]
+            except (ValueError, np.linalg.LinAlgError):
+                posture = "neutral"
+
+        bucket_rets = buckets.bucket_returns(
+            window, class_bucket, active_buckets
+        )
+        recent = bucket_rets.tail(lookback)
+        cov = allocation.covariance_matrix(recent, method=cov_method)
+
+        prior = allocation.equilibrium_returns(
+            market_weights_bucket, cov, bcfg["delta"]
+        )
+        if "cash" in prior.index:
+            prior.loc["cash"] = rf
+
+        view_set = views.regime_view(posture, bucket_identity, prior, cfg)
+        P, Q, Omega, _ = views.assemble(
+            [view_set], pd.Index(active_buckets), cov, cfg
+        )
+        mu_bl = allocation.black_litterman(
+            prior, cov, P, Q, Omega, bcfg["tau"]
+        )
+
+        candidates = {
+            "black_litterman": allocation.max_sharpe(
+                mu_bl, cov, bucket_cfg, rf=rf
+            ),
+            "gmv": allocation.gmv(cov, bucket_cfg),
+            "risk_parity": allocation.risk_parity(cov, bucket_cfg),
+        }
+        selected_bucket = _select_gated_candidate(
+            candidates, mu_bl, cov, bcfg, rf
+        )
+        return buckets.expand_bucket_weights(selected_bucket, class_bucket)
 
     return strategy_fn

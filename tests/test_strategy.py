@@ -44,7 +44,7 @@ CFG = {
         "hmm": {"n_states": 3, "vol_window_days": 21, "lookback_days": 1260},
     },
     "optimization": {"lookback_days": 500, "covariance": "ledoit_wolf"},
-    "constraints": {"per_asset_cap": 0.6},
+    "constraints": {"per_asset_cap": 0.6, "per_class_cap": 0.6},
 }
 
 CLASS_BUCKET = pd.Series(
@@ -918,3 +918,88 @@ def test_black_litterman_strategy_unknown_gate_raises():
     )
     with pytest.raises(ValueError, match="not_a_real_gate"):
         strategy_fn(returns.index[-1], returns)
+
+
+BUCKET_CLASS_BUCKET = pd.concat(
+    [CLASS_BUCKET, pd.Series({"VNQ": "real_estate"})]
+)
+
+
+def _iid_returns_with_real_estate(n=1400, seed=3) -> pd.DataFrame:
+    dates = pd.bdate_range("2015-01-01", periods=n)
+    rng = np.random.default_rng(seed)
+    data = {t: rng.normal(0.0004, 0.01, n) for t in BUCKET_CLASS_BUCKET.index}
+    return pd.DataFrame(data, index=dates)
+
+
+def test_bucket_black_litterman_strategy_returns_valid_weights():
+    returns = _iid_returns_with_real_estate()
+    strategy_fn = strategy.bucket_black_litterman_strategy(
+        BUCKET_CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert abs(weights.sum() - 1.0) < 1e-6
+    assert (weights >= -1e-9).all()
+    assert set(weights.index) == set(BUCKET_CLASS_BUCKET.index)
+
+
+def test_bucket_black_litterman_strategy_excludes_zero_weight_bucket():
+    # real_estate has zero equilibrium weight (allocation.permanent
+    # only references equity/fixed_income/commodity/cash), so it must
+    # be excluded from the bucket-level universe entirely, not just
+    # given a small weight.
+    returns = _iid_returns_with_real_estate()
+    strategy_fn = strategy.bucket_black_litterman_strategy(
+        BUCKET_CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert weights["VNQ"] == 0.0
+
+
+def test_bucket_black_litterman_strategy_equal_weights_within_bucket():
+    # ACWI is the only equity ticker in this fixture, so this doesn't
+    # exercise the equal-split directly; instead check fixed_income,
+    # which (per CLASS_BUCKET) has no additional members either --
+    # use a fixture where a bucket genuinely has 2+ members.
+    class_bucket = pd.concat(
+        [CLASS_BUCKET, pd.Series({"IEF": "fixed_income"})]
+    )
+    dates = pd.bdate_range("2015-01-01", periods=1400)
+    rng = np.random.default_rng(9)
+    data = {t: rng.normal(0.0004, 0.01, 1400) for t in class_bucket.index}
+    returns = pd.DataFrame(data, index=dates)
+
+    strategy_fn = strategy.bucket_black_litterman_strategy(
+        class_bucket, BL_CFG, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert weights["AGG"] == pytest.approx(weights["IEF"])
+
+
+def test_bucket_black_litterman_strategy_respects_per_class_cap():
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["constraints"]["per_class_cap"] = 0.6
+    returns = _iid_returns_with_real_estate()
+    strategy_fn = strategy.bucket_black_litterman_strategy(
+        BUCKET_CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    bucket_totals = weights.groupby(BUCKET_CLASS_BUCKET).sum()
+    assert (bucket_totals <= 0.6 + 1e-6).all()
+
+
+@pytest.mark.parametrize("gate", ["off", "vol_floor", "utility"])
+def test_bucket_black_litterman_strategy_gate_modes(gate):
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["gate"] = gate
+    returns = _iid_returns_with_real_estate()
+    strategy_fn = strategy.bucket_black_litterman_strategy(
+        BUCKET_CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert abs(weights.sum() - 1.0) < 1e-6

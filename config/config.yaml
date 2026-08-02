@@ -51,7 +51,12 @@ rebalance:
 constraints:
   long_only: true
   per_asset_cap: 0.20
-  per_class_cap: 0.60
+  per_class_cap: 0.60              # max weight per bucket in
+                                    # strategy.bucket_black_litterman_strategy
+                                    # (S11 Tier 2) -- a bucket isn't a single
+                                    # concentrated position the way an asset
+                                    # is, so the tighter per_asset_cap doesn't
+                                    # apply at that level of abstraction.
   tracking_error_budget: null      # optional TE budget vs benchmark; null = off
 
 modules:                           # ablation on/off flags
@@ -69,6 +74,15 @@ modules:                           # ablation on/off flags
   sentiment_view: true             # V4
   anomaly_override: true
   execution_timing: true
+  bucket_level: false              # S11 Tier 2: when true, notebooks build
+                                    # strategy.bucket_black_litterman_strategy
+                                    # (BL fused at the 4-bucket level) instead
+                                    # of the asset-level strategy.black_
+                                    # litterman_strategy. Both are kept and
+                                    # compared side by side, not one replacing
+                                    # the other -- this flag documents which
+                                    # is "current" without deleting either
+                                    # path (DIAGNOSTIC.md action 5).
 
 regimes:
   market_ticker: ACWI               # broad-market proxy the HMM is fit on
