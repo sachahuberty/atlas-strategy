@@ -148,18 +148,35 @@ black_litterman:
   delta: 2.5                        # risk-aversion / equilibrium calibration
                                      # (classic BL default)
   regime_view_magnitude: 0.03        # V1's asset-class-level return tilt
-  risk_aversion_for_utility_gate: 5  # which of optimization.risk_aversion_levels
-                                     # decides the BL-vs-defensive utility gate
+  risk_aversion_for_utility_gate: 2  # which of optimization.risk_aversion_levels
+                                     # decides the BL-vs-defensive utility gate.
+                                     # Was 5 through stage 9; stage 11's gate
+                                     # ablation (notebook 11) measured A=5
+                                     # letting GMV win the gate 236/236 sampled
+                                     # OOS weeks (100%) -- the pipeline had
+                                     # silently become plain GMV every week.
+                                     # A=2 (this value) lets max_sharpe win
+                                     # ~84% of weeks while the gate still does
+                                     # real, occasional risk management the
+                                     # other ~16%, and measured the single
+                                     # largest Sharpe improvement in the whole
+                                     # ablation study (0.8330 -> 0.9863) --
+                                     # bigger than removing the gate entirely
+                                     # (0.8765) or a vol_floor alternative
+                                     # (no improvement at all, identical to
+                                     # A=5). The gate mechanism itself was not
+                                     # the problem; A=5 was miscalibrated for
+                                     # this universe's actual return/vol
+                                     # profile.
   gate: utility                     # "utility" (default, mean-variance
                                      # comparison), "off" (always select the
                                      # max_sharpe book, no gating), or
                                      # "vol_floor" (reject max_sharpe only if
                                      # its vol exceeds vol_floor_multiplier x
-                                     # GMV's vol). DIAGNOSTIC.md Sec 3: a
-                                     # quadratic utility penalty structurally
-                                     # favors minimum variance regardless of
-                                     # signal quality -- Tier 2 ablates this
-                                     # in notebook 11 before changing it here.
+                                     # GMV's vol). Measured in notebook 11:
+                                     # "utility" at the recalibrated A=2 beat
+                                     # both alternatives, so the gate stays on
+                                     # in its original form.
   vol_floor_multiplier: 1.5         # only used when gate: vol_floor
   view_confidence:                 # per view family, relative scale
     regime: 1.0
