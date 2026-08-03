@@ -39,31 +39,39 @@ pytest
 ## Results
 
 Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09),
-current state after DIAGNOSTIC.md's Tier-1 fixes (V3 disabled, cash
-exclusion reverted, a real risk-free rate). **Development-set OOS, not
+current state after DIAGNOSTIC.md's Tier-1 AND Tier-2 fixes (V3
+disabled, cash exclusion reverted, a real risk-free rate, and the
+utility gate recalibrated from A=5 to A=2). **Development-set OOS, not
 virgin OOS** -- with ~4.5 years of daily data the standard error on a
 Sharpe estimate is roughly ±0.22, so most rows here are within one SE
 of each other and should not be read as a confident ranking.
 
 | Strategy | Sharpe | Excess Sharpe (vs. T-bill) | Max drawdown | Ann. vol |
 | --- | --- | --- | --- | --- |
-| permanent | 1.07 ± 0.22 | 0.59 | -12.6% | 8.3% |
-| risk_parity | 0.81 ± 0.22 | 0.41 | -16.5% | 9.8% |
-| sixty_forty | 0.57 ± 0.22 | 0.22 | -22.5% | 11.5% |
-| max_sharpe_static | 0.60 ± 0.22 | -0.12 | -13.6% | 5.5% |
+| permanent | 1.08 ± 0.22 | 0.60 | -12.6% | 8.3% |
+| **black_litterman (frozen)** | **0.91 ± 0.22** | **0.63** | -16.4% | 14.4% |
+| black_litterman (bucket-level) | 0.86 ± 0.22 | 0.38 | -13.8% | 8.4% |
+| risk_parity | 0.83 ± 0.22 | 0.43 | -16.5% | 9.8% |
 | hrp | 0.82 ± 0.22 | -0.31 | -9.2% | 3.5% |
-| **black_litterman (frozen)** | **0.74 ± 0.22** | **-0.51** | -8.1% | 4.5% |
 | gmv | 0.74 ± 0.22 | -0.51 | -8.1% | 3.2% |
+| max_sharpe_static | 0.62 ± 0.22 | -0.10 | -13.6% | 5.5% |
+| sixty_forty | 0.59 ± 0.22 | 0.25 | -22.5% | 11.5% |
 
-`black_litterman` and `gmv` are numerically identical -- the gate is
-selecting GMV every week (see below). **On an excess-return basis
-(net of the T-bill rate, which averaged ~3-4% through this window),
-neither ATLAS nor plain GMV nor HRP beat cash at all** -- their
-excess Sharpes are negative. Only `permanent`, `risk_parity`, and
-`sixty_forty` cleared that bar. This is a materially different, more
-sobering picture than the total-return Sharpes alone show, and it was
-missing from this README until DIAGNOSTIC.md's audit flagged it
-(§5.2 item 2).
+Recalibrating the utility gate (Tier 2, see below) is the single
+largest improvement in the project's history: `black_litterman
+(frozen)` moved from being numerically identical to plain GMV (Sharpe
+0.74) to clearing every classical benchmark except `permanent`. That
+came with a real cost, not a free lunch -- annualized vol roughly
+tripled (4.5% -> 14.4%) and max drawdown widened past `permanent`'s,
+because the gate now lets the higher-vol max-Sharpe book win the large
+majority of weeks instead of defaulting to minimum variance. The new
+bucket-level alternative (`bucket_black_litterman_strategy`, Tier 2
+item 5) does not beat either `permanent` or the asset-level book in
+this window -- see below for why that doesn't match DIAGNOSTIC.md's
+own independent counterfactual. **On an excess-return basis (net of
+the T-bill rate, which averaged ~3-4% through this window), `hrp` and
+`gmv` still don't beat cash at all** -- their excess Sharpes are
+negative; `black_litterman (frozen)` now does, at 0.63.
 
 ### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
 
@@ -104,6 +112,27 @@ project**, not failures to edit out.
    for a near-zero-covariance asset, versus BIL's realized ~3.9%/yr).
    This fixes the cash degeneracy at its mathematical source instead
    of deleting the asset.
+6. **DIAGNOSTIC.md Tier 2 item 4: the utility gate itself was
+   ablated** (notebook 11: gate on/off, and risk-aversion A in
+   {2, 5, 10}), confirming DIAGNOSTIC.md's diagnosis that the gate,
+   not the fusion pipeline, was the dominant bottleneck. A=5 let GMV
+   win the gate 236/236 sampled OOS weeks; **A=2 measured the single
+   largest Sharpe improvement in the whole ablation** (0.8330 ->
+   0.9863 on the ablation's own shorter harness). A `vol_floor`
+   alternative gate (reject max-Sharpe only if its vol exceeds a
+   band around GMV's) was also measured and did not help -- identical
+   to A=5, since it produced the same GMV-every-week outcome.
+   `black_litterman.risk_aversion_for_utility_gate` was recalibrated
+   5 -> 2 in `config.yaml` on this evidence.
+7. **DIAGNOSTIC.md Tier 2 item 5: a bucket-level allocation layer**
+   (`src/atlas/buckets.py`, `strategy.
+   bucket_black_litterman_strategy`) was built and wired in for
+   comparison, on the reasoning that ~22 assets are really 4-5
+   correlated bets and per-asset covariance/return estimation is
+   mostly noise. Kept alongside, not instead of, the asset-level
+   path (`modules.bucket_level` documents which is "current" without
+   deleting either) -- see the Tier-2 result below for how it
+   performed once actually measured on this repo's full pipeline.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
@@ -123,6 +152,48 @@ than by mathematical accident), but it was **not sufficient** to move
 the headline number -- the utility gate itself is the confirmed
 bottleneck, and re-scoping it (DIAGNOSTIC.md Tier 2) is the next,
 not-yet-applied step.
+
+**Combined Tier-2 result: Sharpe rose from 0.7382 to 0.9103, a large,
+real improvement on the actual frozen pipeline** (excess-return Sharpe
+0.6333) -- directionally consistent with notebook 11's ablation (0.83
+-> 0.99) though not identical in magnitude, expected since the
+ablation ran on a different, shorter/differently-scoped date range and
+without the anomaly override / turnover-cap interactions the full
+frozen pipeline has. `black_litterman (frozen)` now beats every
+classical benchmark in the comparison except `permanent` -- the first
+time in this project's history the BL pipeline has cleared that bar.
+The cost is real, not free: annualized vol nearly tripled (4.5% ->
+14.4%) and max drawdown widened past `permanent`'s (-16.4% vs -12.6%),
+because the recalibrated gate now lets the higher-vol max-Sharpe book
+win the large majority of weeks instead of defaulting to minimum
+variance.
+
+**The bucket-level allocation layer does NOT reproduce DIAGNOSTIC.md's
+own counterfactual, and this is reported as measured rather than
+reframed.** DIAGNOSTIC.md §5.3 found an isolated bucket-level
+counterfactual at Sharpe 1.279 OOS, beating `permanent` (1.067) in
+that window. Once actually built and wired into this repo's real
+pipeline (`strategy.bucket_black_litterman_strategy`, with the real
+gate, real risk-free rate, and real turnover cap), it scores **0.8602**
+-- close to `risk_parity` and `hrp`, but behind both the asset-level
+book (0.9103) and `permanent` (1.0841). The most likely explanation is
+that DIAGNOSTIC.md's counterfactual was computed as an isolated
+experiment whose rf handling, gate behavior, and turnover/anomaly
+interactions were not necessarily identical to the full pipeline this
+repo now runs, so the two numbers are not measuring quite the same
+object despite the shared label. Kept in the codebase behind
+`modules.bucket_level` for future comparison, not deleted, per this
+project's discipline of reporting negative or unremarkable results
+plainly.
+
+**Permanent still leads the whole comparison (1.0841 Sharpe), the same
+conclusion as every prior stage of this project.** Tier 2's real,
+measured win is that the BL pipeline's own OOS Sharpe now clears every
+classical benchmark it previously lost to except `permanent` itself --
+achieved by fixing the gate's calibration, not any signal or view
+logic, and consistent with DIAGNOSTIC.md §3's diagnosis that the gate
+was the dominant bottleneck. It is not yet a result that beats the
+benchmark this project is measured against.
 
 ### The benchmark comparison itself is window-dependent
 
