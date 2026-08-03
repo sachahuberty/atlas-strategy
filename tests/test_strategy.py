@@ -765,6 +765,49 @@ def test_black_litterman_strategy_defaults_rf_to_zero_without_rf_series(
     assert captured["prior"]["BIL"] == 0.0
 
 
+def test_black_litterman_strategy_passes_meanrev_eligible_through(
+    monkeypatch,
+):
+    captured = {}
+    original = meanreversion.mean_reversion_view
+
+    def spy(prices, cfg, eligible=None):
+        captured["eligible"] = eligible
+        return original(prices, cfg, eligible=eligible)
+
+    monkeypatch.setattr(meanreversion, "mean_reversion_view", spy)
+
+    returns = _iid_returns()
+    eligible = pd.Index(["ACWI", "GLD"])
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, meanrev_eligible=eligible
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["eligible"] is eligible
+
+
+def test_black_litterman_strategy_defaults_meanrev_eligible_to_none(
+    monkeypatch,
+):
+    captured = {}
+    original = meanreversion.mean_reversion_view
+
+    def spy(prices, cfg, eligible=None):
+        captured["eligible"] = eligible
+        return original(prices, cfg, eligible=eligible)
+
+    monkeypatch.setattr(meanreversion, "mean_reversion_view", spy)
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["eligible"] is None
+
+
 def test_black_litterman_strategy_rf_lookup_ignores_future_values(
     monkeypatch,
 ):

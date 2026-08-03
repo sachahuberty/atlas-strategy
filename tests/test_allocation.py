@@ -178,6 +178,63 @@ def test_sixty_forty_split():
     assert w["AGG"] == pytest.approx(0.4)
 
 
+def test_permanent_uncapped_by_default():
+    # Stage 11 Tier 3: cap defaults to None, so a lone `cash` member at
+    # 25% (well above a 20% cap) is untouched unless a caller opts in.
+    class_bucket = pd.Series(
+        {"SPY": "equity", "AGG": "fixed_income", "GLD": "commodity", "BIL": "cash"}
+    )
+    w = permanent(class_bucket)
+    assert w["BIL"] == pytest.approx(0.25)
+
+
+def test_permanent_caps_a_dominant_single_member_bucket():
+    # cash/commodity are single-member buckets (25% each, over a 20%
+    # cap); equity/fixed_income have enough members with enough
+    # collective room to absorb the excess (DIAGNOSTIC.md Sec 5.2 item
+    # 1's real scenario: BIL alone in `cash` breaches the per-asset
+    # cap that every optimizer already respects). Too few total assets
+    # relative to `cap` makes capping mathematically infeasible (e.g.
+    # 4 equal 25% buckets can't all be capped at 20% and still sum to
+    # 1) -- this fixture has enough assets (7 * 0.20 = 1.4 >= 1) to
+    # avoid that degenerate case.
+    class_bucket = pd.Series(
+        {"SPY": "equity", "QQQ": "equity", "VTI": "equity",
+         "AGG": "fixed_income", "IEF": "fixed_income",
+         "GLD": "commodity", "BIL": "cash"}
+    )
+    w = permanent(class_bucket, cap=0.20)
+    _assert_valid_weights(w, cap=0.20)
+    assert w["BIL"] == pytest.approx(0.20)
+    assert w["GLD"] == pytest.approx(0.20)
+
+
+def test_permanent_cap_is_a_noop_when_nothing_exceeds_it():
+    class_bucket = pd.Series(
+        {"SPY": "equity", "QQQ": "equity", "AGG": "fixed_income",
+         "GLD": "commodity", "BIL": "cash"}
+    )
+    uncapped = permanent(class_bucket)
+    loosely_capped = permanent(class_bucket, cap=0.9)
+    pd.testing.assert_series_equal(uncapped, loosely_capped)
+
+
+def test_sixty_forty_caps_a_dominant_single_member_bucket():
+    # A single equity ticker would take the full 60% -- well above a
+    # 20% cap -- unless capped and redistributed. 4 fixed_income
+    # members give enough room (5 assets * 0.20 cap = 1.0, exactly
+    # feasible) for every asset to land at exactly the cap.
+    class_bucket = pd.Series(
+        {"SPY": "equity", "AGG": "fixed_income", "IEF": "fixed_income",
+         "TLT": "fixed_income", "SHY": "fixed_income"}
+    )
+    w = sixty_forty(class_bucket, cap=0.20)
+    _assert_valid_weights(w, cap=0.20)
+    assert w["SPY"] == pytest.approx(0.20)
+    assert w["AGG"] == pytest.approx(0.20)
+    assert w.sum() == pytest.approx(1.0)
+
+
 def test_utility_select_picks_higher_utility_candidate():
     mu = pd.Series({"A": 0.10, "B": 0.10})
     cov = pd.DataFrame(

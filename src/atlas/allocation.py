@@ -32,7 +32,8 @@ Public API (stage 2):
     hrp(returns, cfg) -> weights                  # S4 dendrogram
     tracking_error_min(cov, benchmark, cfg) -> weights   # S2
     efficient_frontier(mu, cov, cfg) -> pd.DataFrame     # S2/S3
-    permanent(class_bucket) / sixty_forty(class_bucket) -> weights
+    permanent(class_bucket, cap=None) -> weights
+    sixty_forty(class_bucket, cap=None) -> weights
     utility_select(candidates, mu, cov, risk_aversion, rf=0.0) -> (name, w)
     cap_and_renormalize(weights, cap) -> weights   # waterfall re-cap, reused
                                                     # by hrp and every tilt
@@ -360,10 +361,23 @@ def _bucket_equal_weight(
     return pd.Series(total_weight / len(members), index=members)
 
 
-def permanent(class_bucket: pd.Series) -> pd.Series:
+def permanent(
+    class_bucket: pd.Series, cap: float | None = None
+) -> pd.Series:
     """Permanent Portfolio benchmark: 25% each into equity,
     fixed_income, commodity, and cash, split equally within each
-    bucket (S4)."""
+    bucket (S4).
+
+    `cap`, if given (stage 11 Tier 3, DIAGNOSTIC.md Sec 5.2 item 1/
+    action 8), applies `cap_and_renormalize` so a thin bucket (e.g.
+    `cash` = a single ticker) can't sit above the same per-asset cap
+    every optimizer in this module already respects. Defaults to None
+    (uncapped, the pre-Tier-3 behavior) because `permanent()` is also
+    used internally as the Black-Litterman equilibrium-weight proxy
+    (`strategy.black_litterman_strategy`/`bucket_black_litterman_
+    strategy`) -- capping there would change the strategy's own
+    equilibrium prior, not just this benchmark's reported weights, so
+    callers must opt in explicitly."""
     parts = [
         _bucket_equal_weight(class_bucket, "equity", 0.25),
         _bucket_equal_weight(class_bucket, "fixed_income", 0.25),
@@ -371,18 +385,28 @@ def permanent(class_bucket: pd.Series) -> pd.Series:
         _bucket_equal_weight(class_bucket, "cash", 0.25),
     ]
     weights = pd.concat(parts)
-    return weights.reindex(class_bucket.index).fillna(0.0)
+    weights = weights.reindex(class_bucket.index).fillna(0.0)
+    if cap is not None:
+        weights = cap_and_renormalize(weights, cap)
+    return weights
 
 
-def sixty_forty(class_bucket: pd.Series) -> pd.Series:
+def sixty_forty(
+    class_bucket: pd.Series, cap: float | None = None
+) -> pd.Series:
     """60/40 benchmark: 60% equity, 40% fixed income, split equally
-    within each bucket (S1/S5)."""
+    within each bucket (S1/S5). `cap`, if given, applies
+    `cap_and_renormalize` -- see `permanent`'s docstring; defaults to
+    None (uncapped, the pre-Tier-3 behavior)."""
     parts = [
         _bucket_equal_weight(class_bucket, "equity", 0.60),
         _bucket_equal_weight(class_bucket, "fixed_income", 0.40),
     ]
     weights = pd.concat(parts)
-    return weights.reindex(class_bucket.index).fillna(0.0)
+    weights = weights.reindex(class_bucket.index).fillna(0.0)
+    if cap is not None:
+        weights = cap_and_renormalize(weights, cap)
+    return weights
 
 
 def utility_select(

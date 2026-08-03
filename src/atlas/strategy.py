@@ -61,7 +61,8 @@ Public API (stage 7):
 
 Public API (stage 8):
     black_litterman_strategy(class_bucket, cfg, posture_cfg,
-                              market_ticker, rf_series) -> strategy_fn
+                              market_ticker, rf_series,
+                              meanrev_eligible) -> strategy_fn
 
 Public API (stage 11, Tier 2): bucket_black_litterman_strategy runs
 the same Black-Litterman/gate machinery on the four asset-class
@@ -395,6 +396,7 @@ def black_litterman_strategy(
     posture_cfg: dict,
     market_ticker: str | None = None,
     rf_series: pd.Series | None = None,
+    meanrev_eligible: pd.Index | None = None,
 ) -> StrategyFn:
     """Build a `backtest.run`-compatible strategy_fn implementing the
     full Black-Litterman fusion pipeline (S4, stage 8):
@@ -429,6 +431,13 @@ def black_litterman_strategy(
     (via `.asof`, so never a future value) is used as `rf` throughout
     this week's decision. Defaults to a constant 0.0 (the stage 1-10
     total-return convention) if omitted.
+
+    `meanrev_eligible`, if given (stage 11 Tier 3), restricts V2's
+    view to tickers in that index -- see `meanreversion.
+    hit_rate_eligible_tickers`. Intended to be computed once from an
+    IS-only price slice and frozen for the OOS run, not recomputed
+    weekly. Defaults to None (every ticker eligible, the pre-Tier-3
+    behavior).
 
     Stage-11 note: an earlier version of this function excluded the
     `cash` bucket from max_sharpe's universe entirely (rf=0 makes a
@@ -491,7 +500,9 @@ def black_litterman_strategy(
         prices = (1.0 + window).cumprod()
         if meanreversion.has_enough_history(prices, cfg):
             try:
-                meanrev_view = meanreversion.mean_reversion_view(prices, cfg)
+                meanrev_view = meanreversion.mean_reversion_view(
+                    prices, cfg, eligible=meanrev_eligible
+                )
             except ValueError:
                 meanrev_view = pd.Series(0.0, index=tickers)
         else:

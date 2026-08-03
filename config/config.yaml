@@ -132,6 +132,27 @@ meanreversion:
   vol_filter: true
   vol_filter_percentile: 75         # only trade below this trailing-vol pct
   max_tilt_pp: 0.05                 # max per-asset weight tilt from V2
+  min_hit_rate: 0.55                # S11 Tier 3: per-asset eligibility bar
+                                     # for meanreversion.hit_rate_eligible_
+                                     # tickers (DIAGNOSTIC.md Sec 2.1/6
+                                     # action 6). A uniform V2 rule across
+                                     # the whole universe has no clean edge
+                                     # (stage 5/11: near-zero marginal OOS
+                                     # Sharpe); restricting V2 to only the
+                                     # names with an above-chance historical
+                                     # hit rate is meant to isolate whatever
+                                     # real edge exists. 0.55 matches
+                                     # DIAGNOSTIC.md's own suggested bar; a
+                                     # fresh IS-only event study (2021-12-31
+                                     # boundary, horizon_days=20) clears
+                                     # only VNQ (~59%) and HYG (~57%) of 22
+                                     # tickers at this threshold -- every
+                                     # other name, including the ones this
+                                     # project's own earlier notes described
+                                     # as "meaningfully below chance," is
+                                     # actually statistically indistinguish-
+                                     # able from 50% at this sample size
+                                     # (n=126-358 events, SE~4.5-9pp).
 
 technicals:
   pivot_order: 5
@@ -222,6 +243,10 @@ grid_search:
   turnover:
     no_trade_band: [0.0025, 0.005, 0.01]
     max_weekly_turnover: [0.01, 0.02, 0.04]
+  hmm:
+    n_states_range: [2, 3, 4, 5, 6]    # candidates for regimes.
+                                        # hmm_bic_curve's IS-only BIC
+                                        # selection (S11 Tier 3)
 
 risk:
   stress_data_start: "2007-01-01"  # wider window than general.start_date

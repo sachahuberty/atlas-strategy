@@ -33,15 +33,31 @@ represents the expected cumulative move over the reversion horizon
 instead of one day -- landing in the same ballpark as the other view
 families.
 
+Stage 11 Tier 3: per-asset hit-rate gating. `event_study` scores each
+asset's own historical hit rate; DIAGNOSTIC.md Sec 2.1/6 action 6
+observed that this rate varies a lot by asset (some names meaningfully
+above chance, most indistinguishable from it, a couple below) and
+proposed only trading V2 on the names that clear a minimum bar,
+instead of applying one uniform rule regardless of whether an asset
+has ever shown a real reversion edge. `hit_rate_eligible_tickers`
+derives that per-asset eligibility set (IS-only, by construction:
+callers pass an IS-only price slice); `reversion_signal`/
+`mean_reversion_view` accept an optional `eligible` index to mask
+`tradeable` down to that set, so an asset that fails every other gate
+check gets zeroed exactly as before, and one that passes them all but
+was never a real reversion play (per its own historical hit rate) is
+now zeroed too.
+
 Public API:
     detrend_log_price(prices, lookback) -> pd.DataFrame
     zscore(series, lookback) -> pd.Series | pd.DataFrame
     adf_pvalue(series) -> float
     ou_half_life(series) -> float
     volatility_filter(returns, cfg) -> pd.Series        # bool mask
-    reversion_signal(prices, cfg, as_of) -> pd.DataFrame  # diagnostic table
-    mean_reversion_view(prices, cfg) -> pd.Series       # per-asset view, V2
+    reversion_signal(prices, cfg, as_of, eligible) -> pd.DataFrame
+    mean_reversion_view(prices, cfg, eligible) -> pd.Series  # V2 view
     event_study(prices, cfg, horizon_days) -> pd.DataFrame
+    hit_rate_eligible_tickers(prices, cfg, horizon_days) -> pd.Index
     has_enough_history(prices, cfg) -> bool
 """
 
@@ -132,7 +148,10 @@ def volatility_filter(returns: pd.DataFrame, cfg: dict) -> pd.Series:
 
 
 def reversion_signal(
-    prices: pd.DataFrame, cfg: dict, as_of: pd.Timestamp | None = None
+    prices: pd.DataFrame,
+    cfg: dict,
+    as_of: pd.Timestamp | None = None,
+    eligible: pd.Index | None = None,
 ) -> pd.DataFrame:
     """Per-asset mean-reversion diagnostic table as of the last (or
     given) date: z, ADF p-value, half-life, vol-filter pass, and the
@@ -143,6 +162,11 @@ def reversion_signal(
     comparable in magnitude to the other (annual) view families, not
     two orders of magnitude below them (stage 11 fix). Zero unless
     |z| > entry_z, ADF, half-life, and vol-filter all pass.
+
+    `eligible`, if given (stage 11 Tier 3), further restricts
+    `tradeable` to tickers in that index -- see
+    `hit_rate_eligible_tickers`. Defaults to None (no restriction,
+    every ticker eligible), the pre-Tier-3 behavior.
     """
     mcfg = cfg["meanreversion"]
     window = mcfg["lookback_days"]
@@ -183,6 +207,8 @@ def reversion_signal(
         & (diag["half_life"] <= mcfg["max_half_life_days"])
         & diag["vol_ok"]
     ).fillna(False)
+    if eligible is not None:
+        diag["tradeable"] &= diag.index.isin(eligible)
 
     # beta * detrended alone is the expected NEXT-DAY drift; scaling by
     # the (capped) half-life turns it into an expected return over the
@@ -197,10 +223,13 @@ def reversion_signal(
     return diag
 
 
-def mean_reversion_view(prices: pd.DataFrame, cfg: dict) -> pd.Series:
+def mean_reversion_view(
+    prices: pd.DataFrame, cfg: dict, eligible: pd.Index | None = None
+) -> pd.Series:
     """Per-asset V2 view (S10): thin wrapper around reversion_signal
-    for callers that just want the final view vector."""
-    return reversion_signal(prices, cfg)["view"]
+    for callers that just want the final view vector. `eligible` is
+    passed straight through -- see `reversion_signal`."""
+    return reversion_signal(prices, cfg, eligible=eligible)["view"]
 
 
 def event_study(
@@ -227,3 +256,27 @@ def event_study(
         hit_rate = float(reverted[ticker][mask].mean()) if n > 0 else np.nan
         rows.append({"ticker": ticker, "n_events": n, "hit_rate": hit_rate})
     return pd.DataFrame(rows).set_index("ticker")
+
+
+def hit_rate_eligible_tickers(
+    prices: pd.DataFrame, cfg: dict, horizon_days: int = 20
+) -> pd.Index:
+    """Tickers whose own `event_study` hit rate clears
+    `meanreversion.min_hit_rate` (stage 11 Tier 3, DIAGNOSTIC.md
+    Sec 2.1/6 action 6): a uniform mean-reversion rule applied
+    indiscriminately across the universe has no clean edge (stage 5's
+    own event study, reconfirmed by the stage-11 ablation's near-zero
+    marginal Sharpe for V2), but some individual assets do show a
+    real, above-chance reversion tendency. Restricting V2 to only
+    those names, rather than every ticker that happens to be
+    `tradeable` this week, is meant to isolate that edge.
+
+    Intended to be computed ONCE on an in-sample-only price slice and
+    frozen for the OOS run (same convention as `meanreversion.
+    lookback_days`/`entry_z`'s grid search), not recomputed inside the
+    weekly `reversion_signal` call -- pass the result via
+    `reversion_signal`'s/`mean_reversion_view`'s `eligible` parameter.
+    """
+    min_hit_rate = cfg["meanreversion"]["min_hit_rate"]
+    hit_rates = event_study(prices, cfg, horizon_days=horizon_days)
+    return hit_rates.index[hit_rates["hit_rate"] >= min_hit_rate]

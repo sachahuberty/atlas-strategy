@@ -12,9 +12,19 @@ Macro K-Means is structural context only in this stage (component 3):
 it is not yet wired into the V1 decision in strategy.py. It becomes a
 confidence input alongside the anomaly/GMM agreement score in stage 4.
 
+Stage 11 Tier 3: `n_states` (HMM regime count) was a fixed, reasoned-
+but-untuned default (3) through stage 10. `hmm_bic_curve` fits a
+candidate HMM at each `n_states` in a range and scores it by BIC
+(hmmlearn's built-in `GaussianHMM.bic`, which already accounts for
+`covariance_type="diag"`'s parameter count -- no need to hand-derive
+it), so a caller can freeze the argmin on an IS-only window, the same
+"grid search IS-only, freeze for OOS" convention as `meanreversion.
+lookback_days`/`entry_z` and the turnover cap (notebook 09).
+
 Public API:
     has_enough_history(market_returns, cfg) -> bool
     fit_hmm(market_returns, cfg) -> (model, features_df)
+    hmm_bic_curve(market_returns, cfg, n_states_range) -> pd.Series
     decode_states(model, features_df) -> pd.Series
     state_profiles(states, market_returns) -> pd.DataFrame
     map_states_to_postures(profiles, posture_cfg) -> dict[state, name]
@@ -87,6 +97,32 @@ def fit_hmm(
     )
     model.fit(features.values)
     return model, features
+
+
+def hmm_bic_curve(
+    market_returns: pd.Series, cfg: dict, n_states_range: range
+) -> pd.Series:
+    """BIC (lower is better) for a GaussianHMM fit at each candidate
+    `n_states` in `n_states_range`, on the same trailing
+    `regimes.hmm.lookback_days` window and feature set `fit_hmm` uses
+    (stage 11 Tier 3). Intended for an IS-only elbow-style selection,
+    mirroring `macro_elbow_curve`: fit once per candidate, pick the
+    argmin, freeze that value into `regimes.hmm.n_states` for the OOS
+    run -- not refit inside the weekly backtest loop."""
+    hmm_cfg = cfg["regimes"]["hmm"]
+    window = market_returns.tail(hmm_cfg["lookback_days"])
+    features = _hmm_features(window, hmm_cfg["vol_window_days"])
+    bics = {}
+    for k in n_states_range:
+        model = GaussianHMM(
+            n_components=k,
+            covariance_type="diag",
+            random_state=cfg["general"]["random_seed"],
+            n_iter=100,
+        )
+        model.fit(features.values)
+        bics[k] = model.bic(features.values)
+    return pd.Series(bics)
 
 
 def decode_states(model: GaussianHMM, features: pd.DataFrame) -> pd.Series:

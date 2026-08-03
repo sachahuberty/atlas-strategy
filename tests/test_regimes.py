@@ -105,6 +105,45 @@ def test_market_regime_flags_a_clearly_volatile_negative_block():
     }
 
 
+def _two_block_market_returns(n=1400, seed=1) -> pd.Series:
+    dates = pd.bdate_range("2015-01-01", periods=n)
+    rng = np.random.default_rng(seed)
+    values = []
+    for i in range(n):
+        if (i // 100) % 2 == 0:
+            values.append(rng.normal(0.0006, 0.006))
+        else:
+            values.append(rng.normal(-0.0004, 0.02))
+    return pd.Series(values, index=dates)
+
+
+def test_hmm_bic_curve_returns_series_indexed_by_n_states():
+    market_returns = _two_block_market_returns()
+    cfg = {
+        "general": {"random_seed": 42},
+        "regimes": {
+            "hmm": {"n_states": 3, "vol_window_days": 21, "lookback_days": 1260}
+        },
+    }
+    bic = regimes.hmm_bic_curve(market_returns, cfg, range(2, 5))
+    assert list(bic.index) == [2, 3, 4]
+    assert bic.notna().all()
+    assert (np.isfinite(bic)).all()
+
+
+def test_hmm_bic_curve_is_deterministic_given_a_fixed_seed():
+    market_returns = _two_block_market_returns()
+    cfg = {
+        "general": {"random_seed": 42},
+        "regimes": {
+            "hmm": {"n_states": 3, "vol_window_days": 21, "lookback_days": 1260}
+        },
+    }
+    first = regimes.hmm_bic_curve(market_returns, cfg, range(2, 4))
+    second = regimes.hmm_bic_curve(market_returns, cfg, range(2, 4))
+    pd.testing.assert_series_equal(first, second)
+
+
 def _synthetic_macro_df(dates: pd.DatetimeIndex) -> pd.DataFrame:
     growth = pd.Series(100.0, index=dates)
     inflation = pd.Series(100.0, index=dates)
