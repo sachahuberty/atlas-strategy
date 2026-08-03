@@ -39,39 +39,47 @@ pytest
 ## Results
 
 Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09),
-current state after DIAGNOSTIC.md's Tier-1 AND Tier-2 fixes (V3
-disabled, cash exclusion reverted, a real risk-free rate, and the
-utility gate recalibrated from A=5 to A=2). **Development-set OOS, not
-virgin OOS** -- with ~4.5 years of daily data the standard error on a
-Sharpe estimate is roughly ±0.22, so most rows here are within one SE
-of each other and should not be read as a confident ranking.
+current state after all of DIAGNOSTIC.md's Tier-1, Tier-2, AND Tier-3
+fixes (V3 disabled, cash exclusion reverted, a real risk-free rate,
+the utility gate recalibrated from A=5 to A=2, HMM `n_states` selected
+by BIC, V2 restricted to per-asset hit-rate-eligible tickers, and the
+classical benchmarks capped at the same 20% per-asset limit the
+strategy faces). **Development-set OOS, not virgin OOS** -- with ~4.5
+years of daily data the standard error on a Sharpe estimate is roughly
+±0.22, so most rows here are within one SE of each other and should
+not be read as a confident ranking.
 
 | Strategy | Sharpe | Excess Sharpe (vs. T-bill) | Max drawdown | Ann. vol |
 | --- | --- | --- | --- | --- |
-| permanent | 1.08 ± 0.22 | 0.60 | -12.6% | 8.3% |
-| **black_litterman (frozen)** | **0.91 ± 0.22** | **0.63** | -16.4% | 14.4% |
-| black_litterman (bucket-level) | 0.86 ± 0.22 | 0.38 | -13.8% | 8.4% |
+| permanent | 1.06 ± 0.22 | 0.61 | -13.4% | 8.8% |
+| **black_litterman (frozen)** | **0.90 ± 0.22** | **0.63** | -16.7% | 14.7% |
 | risk_parity | 0.83 ± 0.22 | 0.43 | -16.5% | 9.8% |
 | hrp | 0.82 ± 0.22 | -0.31 | -9.2% | 3.5% |
+| black_litterman (bucket-level) | 0.81 ± 0.22 | 0.40 | -16.2% | 9.7% |
 | gmv | 0.74 ± 0.22 | -0.51 | -8.1% | 3.2% |
 | max_sharpe_static | 0.62 ± 0.22 | -0.10 | -13.6% | 5.5% |
 | sixty_forty | 0.59 ± 0.22 | 0.25 | -22.5% | 11.5% |
 
-Recalibrating the utility gate (Tier 2, see below) is the single
-largest improvement in the project's history: `black_litterman
-(frozen)` moved from being numerically identical to plain GMV (Sharpe
-0.74) to clearing every classical benchmark except `permanent`. That
-came with a real cost, not a free lunch -- annualized vol roughly
-tripled (4.5% -> 14.4%) and max drawdown widened past `permanent`'s,
-because the gate now lets the higher-vol max-Sharpe book win the large
-majority of weeks instead of defaulting to minimum variance. The new
-bucket-level alternative (`bucket_black_litterman_strategy`, Tier 2
-item 5) does not beat either `permanent` or the asset-level book in
-this window -- see below for why that doesn't match DIAGNOSTIC.md's
-own independent counterfactual. **On an excess-return basis (net of
-the T-bill rate, which averaged ~3-4% through this window), `hrp` and
+Recalibrating the utility gate (Tier 2) remains the single largest
+improvement in the project's history: `black_litterman (frozen)` moved
+from being numerically identical to plain GMV (Sharpe 0.74) to
+clearing every classical benchmark except `permanent`. That came with
+a real cost, not a free lunch -- annualized vol roughly tripled (4.5%
+-> 14.7%) and max drawdown widened past `permanent`'s, because the
+gate now lets the higher-vol max-Sharpe book win the large majority of
+weeks instead of defaulting to minimum variance. Tier 3's three
+changes moved the picture only slightly (`black_litterman (frozen)`
+0.91 -> 0.90, within noise) but made the comparison itself fairer:
+capping `permanent`'s benchmark weights the same way the strategy is
+capped pulled its Sharpe down from 1.08 to 1.06, since its `cash`
+bucket (BIL alone) had been sitting at an uncapped 25%. The bucket-
+level alternative (`bucket_black_litterman_strategy`, Tier 2 item 5)
+still does not beat either `permanent` or the asset-level book in this
+window -- see below for why that doesn't match DIAGNOSTIC.md's own
+independent counterfactual. **On an excess-return basis (net of the
+T-bill rate, which averaged ~3-4% through this window), `hrp` and
 `gmv` still don't beat cash at all** -- their excess Sharpes are
-negative; `black_litterman (frozen)` now does, at 0.63.
+negative; `black_litterman (frozen)` does, at 0.63.
 
 ### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
 
@@ -133,6 +141,23 @@ project**, not failures to edit out.
    path (`modules.bucket_level` documents which is "current" without
    deleting either) -- see the Tier-2 result below for how it
    performed once actually measured on this repo's full pipeline.
+8. **DIAGNOSTIC.md Tier 3 action 6: per-asset V2 hit-rate gate.**
+   `meanreversion.hit_rate_eligible_tickers` restricts V2's view to
+   only tickers whose own historical hit rate clears
+   `meanreversion.min_hit_rate` (0.55, IS-only, frozen for OOS like
+   `lookback_days`/`entry_z`). Found 8 of 22 tickers eligible (`ACWI,
+   GLD, HYG, IWM, QQQ, SPY, VNQ, VTI`).
+9. **DIAGNOSTIC.md Tier 3 action 7: HMM `n_states` selected by BIC.**
+   `regimes.hmm_bic_curve` fits a candidate HMM at each `n_states` in
+   {2..6} and scores by hmmlearn's own `.bic()`; the IS-only argmin is
+   **4** (previously a fixed, untuned 3).
+10. **DIAGNOSTIC.md Tier 3 action 8: benchmarks capped like the
+    strategy.** `allocation.permanent`/`sixty_forty` gained an optional
+    `cap` parameter (default `None`, unchanged behavior everywhere
+    except where a caller opts in); notebook 09's benchmark comparison
+    now passes `cap=constraints.per_asset_cap` so `permanent`'s
+    single-ticker `cash` bucket (previously an uncapped 25%) faces the
+    same 20% limit every optimizer in this project already respects.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
@@ -194,6 +219,30 @@ achieved by fixing the gate's calibration, not any signal or view
 logic, and consistent with DIAGNOSTIC.md §3's diagnosis that the gate
 was the dominant bottleneck. It is not yet a result that beats the
 benchmark this project is measured against.
+
+**Combined Tier-3 result: essentially flat on the strategy's own
+number, and a modestly fairer (harder) benchmark.**
+`black_litterman (frozen)` moved from 0.9103 to **0.9029** -- within
+noise of Tier 2's number, not a real change. `permanent`, by contrast,
+moved from 1.0841 to **1.0571**: capping its `cash` bucket (BIL alone,
+previously an uncapped 25%) to the same 20% limit the strategy already
+respects pulled its Sharpe down measurably, since `cash` had been
+riding an advantage no other book in the comparison had. `black_
+litterman (bucket-level)` also moved (0.8602 -> 0.8070), driven by the
+new `n_states=4` regime read (bucket-level V1 is still active) rather
+than V2 (bucket-level has no V2 view at all). `gmv`, `risk_parity`,
+`hrp`, and `max_sharpe_static` are unchanged -- none of them touch V2,
+HMM `n_states`, or a capped `permanent`/`sixty_forty` call.
+`sixty_forty`'s Sharpe is also unchanged despite now being capped too:
+nothing in its equity/fixed_income split actually exceeded 20% in this
+universe, so the cap only ever bound for `permanent`'s single-ticker
+`cash` bucket. None of Tier 3's three items moved the headline number
+the way Tier 2's gate recalibration did, and that absence is itself
+informative: this pipeline's remaining, measurable headroom was in the
+gate's calibration, not in the HMM's state count, V2's asset coverage,
+or the benchmark's fairness (though the last of those was still worth
+fixing on its own terms -- an uncapped benchmark was never a fair
+comparison to begin with, regardless of how much it moved the number).
 
 ### The benchmark comparison itself is window-dependent
 
