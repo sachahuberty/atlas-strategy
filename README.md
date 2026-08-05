@@ -39,47 +39,49 @@ pytest
 ## Results
 
 Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09),
-current state after all of DIAGNOSTIC.md's Tier-1, Tier-2, AND Tier-3
-fixes (V3 disabled, cash exclusion reverted, a real risk-free rate,
-the utility gate recalibrated from A=5 to A=2, HMM `n_states` selected
-by BIC, V2 restricted to per-asset hit-rate-eligible tickers, and the
-classical benchmarks capped at the same 20% per-asset limit the
-strategy faces). **Development-set OOS, not virgin OOS** -- with ~4.5
-years of daily data the standard error on a Sharpe estimate is roughly
-±0.22, so most rows here are within one SE of each other and should
-not be read as a confident ranking.
+current state after all of DIAGNOSTIC.md's Tier-1, Tier-2, Tier-3, AND
+ANALYSIS_V2.md's Step-1 fixes (V3 disabled, cash exclusion reverted, a
+real risk-free rate, the utility gate recalibrated from A=5 to A=2,
+HMM `n_states` selected by BIC, V2 restricted to per-asset
+hit-rate-eligible tickers, classical benchmarks capped at the same 20%
+per-asset limit the strategy faces, and V5 dual momentum added to the
+fusion). **Development-set OOS, not virgin OOS** -- with ~4.5 years of
+daily data the standard error on a Sharpe estimate is roughly ±0.22,
+so most rows here are within one SE of each other and should not be
+read as a confident ranking.
 
 | Strategy | Sharpe | Excess Sharpe (vs. T-bill) | Max drawdown | Ann. vol |
 | --- | --- | --- | --- | --- |
 | permanent | 1.06 ± 0.22 | 0.61 | -13.4% | 8.8% |
-| **black_litterman (frozen)** | **0.90 ± 0.22** | **0.63** | -16.7% | 14.7% |
-| risk_parity | 0.83 ± 0.22 | 0.43 | -16.5% | 9.8% |
-| hrp | 0.82 ± 0.22 | -0.31 | -9.2% | 3.5% |
-| black_litterman (bucket-level) | 0.81 ± 0.22 | 0.40 | -16.2% | 9.7% |
+| risk_parity | 0.85 ± 0.22 | 0.44 | -16.5% | 9.8% |
+| hrp | 0.83 ± 0.22 | -0.30 | -9.2% | 3.5% |
+| black_litterman (bucket-level) | 0.82 ± 0.22 | 0.41 | -16.2% | 9.7% |
 | gmv | 0.74 ± 0.22 | -0.51 | -8.1% | 3.2% |
-| max_sharpe_static | 0.62 ± 0.22 | -0.10 | -13.6% | 5.5% |
-| sixty_forty | 0.59 ± 0.22 | 0.25 | -22.5% | 11.5% |
+| **black_litterman (frozen, with V5)** | **0.72 ± 0.22** | **0.44** | -16.3% | 14.2% |
+| max_sharpe_static | 0.66 ± 0.22 | -0.06 | -13.6% | 5.5% |
+| sixty_forty | 0.63 ± 0.22 | 0.28 | -22.5% | 11.5% |
 
 Recalibrating the utility gate (Tier 2) remains the single largest
-improvement in the project's history: `black_litterman (frozen)` moved
-from being numerically identical to plain GMV (Sharpe 0.74) to
-clearing every classical benchmark except `permanent`. That came with
-a real cost, not a free lunch -- annualized vol roughly tripled (4.5%
--> 14.7%) and max drawdown widened past `permanent`'s, because the
-gate now lets the higher-vol max-Sharpe book win the large majority of
-weeks instead of defaulting to minimum variance. Tier 3's three
-changes moved the picture only slightly (`black_litterman (frozen)`
-0.91 -> 0.90, within noise) but made the comparison itself fairer:
-capping `permanent`'s benchmark weights the same way the strategy is
-capped pulled its Sharpe down from 1.08 to 1.06, since its `cash`
-bucket (BIL alone) had been sitting at an uncapped 25%. The bucket-
-level alternative (`bucket_black_litterman_strategy`, Tier 2 item 5)
-still does not beat either `permanent` or the asset-level book in this
-window -- see below for why that doesn't match DIAGNOSTIC.md's own
-independent counterfactual. **On an excess-return basis (net of the
-T-bill rate, which averaged ~3-4% through this window), `hrp` and
-`gmv` still don't beat cash at all** -- their excess Sharpes are
-negative; `black_litterman (frozen)` does, at 0.63.
+*improvement* in the project's history, and adding V5 momentum
+(ANALYSIS_V2.md Step 1) is the single largest *regression* since:
+`black_litterman (frozen)` fell from Tier 3's 0.90 to **0.72** once V5
+was added, IS-tuned, and frozen the same way every other parameter in
+this pipeline has been. This is reported plainly, not walked back --
+see "What changed" below for the full mechanism (a 12-week gate census
+shows V5's absolute-trend leg pushing `mu_BL` down hard enough during
+2022's selloff to occasionally flip the gate to a more defensive book,
+and reshaping the max-Sharpe book's composition substantially even in
+weeks where the same book still wins). `black_litterman (frozen)` no
+longer clears every classical benchmark the way it did after Tier 2 --
+it now sits behind `risk_parity`, `hrp`, and the bucket-level
+alternative on both total and excess Sharpe, though still ahead of
+`gmv`, `max_sharpe_static`, and `sixty_forty`. `modules.momentum_view`
+is left `true` for now pending the stage-11 ablation's formal
+marginal-contribution measurement (ANALYSIS_V2.md Step 2, not yet
+run) -- the same venue that measured V3's -0.265 before it was
+disabled. **On an excess-return basis (net of the T-bill rate, which
+averaged ~3-4% through this window), `hrp` and `gmv` still don't beat
+cash at all** -- their excess Sharpes are negative.
 
 ### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
 
@@ -158,6 +160,33 @@ project**, not failures to edit out.
     now passes `cap=constraints.per_asset_cap` so `permanent`'s
     single-ticker `cash` bucket (previously an uncapped 25%) faces the
     same 20% limit every optimizer in this project already respects.
+11. **ANALYSIS_V2.md Step 1: V5 dual momentum added to the fusion --
+    made performance meaningfully worse** (Sharpe 0.9029 -> 0.7172).
+    `src/atlas/momentum.py` implements Antonacci-style dual momentum:
+    a relative leg (12-1 cross-sectional rank within each bucket) and
+    an absolute leg (a bucket only gets a positive relative view if
+    its own trailing return beats the risk-free rate; otherwise every
+    member gets a flat negative view). IS-only grid search (2010-2021,
+    a pure vectorized rank-spread test, no model fitting) selected
+    `lookback_days=189, skip_days=0, top_fraction=0.5`, frozen for
+    OOS. A 12-week gate census (`momentum_view` on vs. off, same
+    frozen pipeline otherwise) shows the mechanism: in most sampled
+    weeks the same book still wins the utility gate, but its
+    composition differs substantially (mean L1 weight difference
+    0.69) since V5's view reshapes `mu_BL` every week it fires; in 2
+    of 12 sampled weeks -- both inside 2022's rate-hike/bond-selloff
+    stretch -- the gate's choice itself flips from the max-Sharpe book
+    to the defensive `risk_parity` book, driven by the absolute leg's
+    flat negative view firing across most buckets simultaneously
+    during a broad selloff. This is a different failure mode from V2
+    (measured ~zero, too weak to matter) or V3 (a clean, uniform
+    negative): V5 is a believable, mechanically-explained signal that
+    materially reshapes the book and occasionally flips the gate, and
+    on this OOS window that reshaping cost return. Kept in the
+    codebase and left `modules.momentum_view: true` pending the
+    stage-11 ablation's formal marginal-contribution number (next
+    step) rather than disabled on this one frozen-pipeline reading
+    alone.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
@@ -243,6 +272,28 @@ gate's calibration, not in the HMM's state count, V2's asset coverage,
 or the benchmark's fairness (though the last of those was still worth
 fixing on its own terms -- an uncapped benchmark was never a fair
 comparison to begin with, regardless of how much it moved the number).
+
+**Momentum (V5) result: a real, measured regression -- Sharpe fell
+from 0.9029 to 0.7172 (excess Sharpe 0.6319 -> 0.4357; ann. return
+12.96% -> 9.57%).** This does not match ANALYSIS_V2.md's own
+standalone momentum harness, which found cross-sectional momentum
+raising IS and OOS returns and the absolute-trend leg cutting
+drawdown -- but that harness tested momentum in isolation (a naive
+tilt on top of `permanent`, no Black-Litterman fusion, no utility
+gate), not wired into the actual pipeline this repo runs. This is the
+same shape of surprise the bucket-level layer produced (ANALYSIS_V2.md
+§3): a signal that looks good standalone can behave differently once
+it flows through BL fusion and a utility gate that reacts to the
+resulting `mu_BL`, not just to the raw signal. `black_litterman
+(frozen)` no longer beats every classical benchmark the way it did
+after Tier 2/3 -- it now trails `risk_parity`, `hrp`, and even the
+bucket-level book, though it still beats `gmv`, `max_sharpe_static`,
+and `sixty_forty`. `modules.momentum_view` stays `true` for now: this
+one frozen-pipeline reading is a real, honest data point, but the
+project's own convention (matching how V3 was disabled) is to make
+that call from the stage-11 ablation's formal marginal-contribution
+number, not from a single before/after comparison -- that ablation
+re-run, with excess Sharpe as the primary metric, is the next step.
 
 ### The benchmark comparison itself is window-dependent
 
