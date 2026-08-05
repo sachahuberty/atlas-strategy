@@ -72,6 +72,14 @@ modules:                           # ablation on/off flags
                                     # and its tests are kept intact as a
                                     # documented negative result, not deleted.
   sentiment_view: true             # V4
+  momentum_view: true              # V5 (ANALYSIS_V2.md Sec 5/6 action 1):
+                                    # dual momentum (12-1 cross-sectional
+                                    # rank + absolute trend-vs-cash gate),
+                                    # the one course-covered factor (S4)
+                                    # never implemented, and the only
+                                    # signal family whose own IS-only
+                                    # validation raised return in both
+                                    # windows and cut drawdown.
   anomaly_override: true
   execution_timing: true
   bucket_level: false              # S11 Tier 2: when true, notebooks build
@@ -178,6 +186,15 @@ sentiment:
   request_timeout_seconds: 10
   user_agent: "ATLAS-research-bot/0.1 (+https://github.com/sachahuberty/atlas-strategy)"
 
+momentum:
+  lookback_days: 252                # 12-1 momentum: ~12 months
+  skip_days: 21                     # ~1 month excluded from the lookback
+                                     # (short-term reversal convention)
+  trend_lookback_days: 252          # absolute-trend-vs-cash horizon
+  top_fraction: 0.5                 # relative leg: top half by within-
+                                     # bucket 12-1 rank gets a positive view
+  max_view_magnitude: 0.03          # bounded per-asset view cap (S4/S11)
+
 black_litterman:
   tau: 0.05
   delta: 2.5                        # risk-aversion / equilibrium calibration
@@ -218,6 +235,10 @@ black_litterman:
     meanreversion: 0.8
     technical: 0.5
     sentiment: 0.3
+    momentum: 0.8                  # V5 (ANALYSIS_V2.md action 1): same
+                                    # confidence tier as V2, the only
+                                    # other view with real measured
+                                    # OOS evidence behind it
 
 optimization:
   objective: max_sharpe            # on BL posterior returns
@@ -243,6 +264,10 @@ grid_search:
   turnover:
     no_trade_band: [0.0025, 0.005, 0.01]
     max_weekly_turnover: [0.01, 0.02, 0.04]
+  momentum:
+    lookback_days: [126, 189, 252]
+    skip_days: [0, 21]
+    top_fraction: [0.33, 0.5]
   hmm:
     n_states_range: [2, 3, 4, 5, 6]    # candidates for regimes.
                                         # hmm_bic_curve's IS-only BIC

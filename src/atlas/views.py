@@ -22,6 +22,7 @@ Public API:
     meanreversion_views(view_series, prior, cfg) -> ViewSet     # V2
     technical_views(view_series, prior, cfg) -> ViewSet         # V3
     sentiment_views(view_series, prior, cfg) -> ViewSet         # V4
+    momentum_views(view_series, prior, cfg) -> ViewSet          # V5
     assemble(view_sets, tickers, cov, cfg) -> (P, Q, Omega, labels)
 """
 
@@ -135,6 +136,17 @@ def sentiment_views(
     empty/zero Series for historical backtests (see sentiment.py)."""
     return _per_asset_views(
         view_series, prior, cfg, "sentiment_view", "sentiment", "V4_sentiment"
+    )
+
+
+def momentum_views(
+    view_series: pd.Series, prior: pd.Series, cfg: dict
+) -> ViewSet:
+    """V5 (S4/S11, ANALYSIS_V2.md action 1): per-asset dual-momentum
+    view (see momentum.momentum_view) as an absolute view on that
+    asset's return, same pattern as V2/V3."""
+    return _per_asset_views(
+        view_series, prior, cfg, "momentum_view", "momentum", "V5_momentum"
     )
 
 

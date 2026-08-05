@@ -41,6 +41,10 @@ The stage 3-7 wrappers remain in the codebase, tested and functional,
 as the historical record of the naive-combination era they were built
 for -- not deleted, just superseded as the "current" strategy.
 
+Stage 11 (ANALYSIS_V2.md action 1): V5 dual momentum (momentum.py)
+joins V1-V3 as another per-asset view in the same fusion, the one
+course-covered factor family (S4) this project hadn't implemented.
+
 Public API (stage 3):
     regime_switching_strategy(class_bucket, cfg, posture_cfg,
                                market_ticker) -> strategy_fn
@@ -90,6 +94,7 @@ from . import (
     anomaly,
     buckets,
     meanreversion,
+    momentum,
     regimes,
     sentiment,
     technicals,
@@ -409,8 +414,9 @@ def black_litterman_strategy(
        risk-free rate (see `rf_series` below) rather than Pi's near-
        zero implied return for a zero-covariance asset.
     3. V1 (regime posture -> asset-class view), V2 (mean-reversion),
-       V3 (technical) each contribute views; V4 (sentiment) is
-       omitted here -- still live-only (see sentiment.py).
+       V3 (technical), V5 (dual momentum) each contribute views; V4
+       (sentiment) is omitted here -- still live-only (see
+       sentiment.py).
     4. Fuse into mu_BL via Black-Litterman.
     5. max_sharpe(mu_BL, Sigma, rf) is the primary book; GMV and Risk
        Parity are defensive/fallback books; `cfg["black_litterman"]
@@ -516,10 +522,21 @@ def black_litterman_strategy(
         else:
             tech_view = pd.Series(0.0, index=tickers)
 
+        if momentum.has_enough_history(prices, cfg):
+            try:
+                mom_view = momentum.momentum_view(
+                    prices, class_bucket, rf_series, cfg
+                )
+            except ValueError:
+                mom_view = pd.Series(0.0, index=tickers)
+        else:
+            mom_view = pd.Series(0.0, index=tickers)
+
         view_sets = [
             views.regime_view(posture, class_bucket, prior, cfg),
             views.meanreversion_views(meanrev_view, prior, cfg),
             views.technical_views(tech_view, prior, cfg),
+            views.momentum_views(mom_view, prior, cfg),
         ]
         P, Q, Omega, _ = views.assemble(view_sets, tickers, cov, cfg)
         mu_bl = allocation.black_litterman(

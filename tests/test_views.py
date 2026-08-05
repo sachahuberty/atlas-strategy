@@ -24,6 +24,7 @@ CFG = {
         "meanreversion_view": True,
         "technical_view": True,
         "sentiment_view": True,
+        "momentum_view": True,
     },
     "black_litterman": {
         "tau": 0.05,
@@ -33,6 +34,7 @@ CFG = {
             "meanreversion": 0.8,
             "technical": 0.5,
             "sentiment": 0.3,
+            "momentum": 0.8,
         },
     },
 }
@@ -98,6 +100,25 @@ def test_technical_and_sentiment_views_use_correct_confidence_keys():
     confidence = CFG["black_litterman"]["view_confidence"]
     assert tech.confidence == [confidence["technical"]]
     assert sent.confidence == [confidence["sentiment"]]
+
+
+def test_momentum_views_uses_correct_confidence_key_and_label():
+    view_series = pd.Series(
+        {"SPY": 0.02, "QQQ": 0.0, "AGG": 0.0, "GLD": -0.01}
+    )
+    mom = views.momentum_views(view_series, PRIOR, CFG)
+    confidence = CFG["black_litterman"]["view_confidence"]
+    assert mom.labels == ["V5_momentum_SPY", "V5_momentum_GLD"]
+    assert mom.confidence == [confidence["momentum"], confidence["momentum"]]
+    assert mom.q_rows[0] == pytest.approx(PRIOR["SPY"] + 0.02)
+    assert mom.q_rows[1] == pytest.approx(PRIOR["GLD"] - 0.01)
+
+
+def test_momentum_views_disabled_module_is_empty():
+    cfg = {**CFG, "modules": {**CFG["modules"], "momentum_view": False}}
+    view_series = pd.Series({"SPY": 0.02, "QQQ": 0.0, "AGG": 0.0, "GLD": 0.0})
+    view_set = views.momentum_views(view_series, PRIOR, cfg)
+    assert len(view_set) == 0
 
 
 def test_assemble_stacks_multiple_view_sets():

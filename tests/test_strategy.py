@@ -14,6 +14,7 @@ from atlas import (
     allocation,
     anomaly,
     meanreversion,
+    momentum,
     regimes,
     strategy,
     technicals,
@@ -611,11 +612,19 @@ BL_CFG = {
         "min_history_days": 60,
         "phase_fraction": 0.5,
     },
+    "momentum": {
+        "lookback_days": 60,
+        "skip_days": 5,
+        "trend_lookback_days": 60,
+        "top_fraction": 0.5,
+        "max_view_magnitude": 0.03,
+    },
     "modules": {
         "regime_view": True,
         "meanreversion_view": True,
         "technical_view": True,
         "sentiment_view": True,
+        "momentum_view": True,
     },
     "black_litterman": {
         "tau": 0.05,
@@ -629,6 +638,7 @@ BL_CFG = {
             "meanreversion": 0.8,
             "technical": 0.5,
             "sentiment": 0.3,
+            "momentum": 0.8,
         },
     },
 }
@@ -806,6 +816,31 @@ def test_black_litterman_strategy_defaults_meanrev_eligible_to_none(
     strategy_fn(returns.index[-1], returns)
 
     assert captured["eligible"] is None
+
+
+def test_black_litterman_strategy_calls_momentum_view(monkeypatch):
+    captured = {}
+    original = momentum.momentum_view
+
+    def spy(prices, class_bucket_arg, rf_series_arg, cfg):
+        captured["class_bucket"] = class_bucket_arg
+        captured["rf_series"] = rf_series_arg
+        return original(prices, class_bucket_arg, rf_series_arg, cfg)
+
+    monkeypatch.setattr(momentum, "momentum_view", spy)
+
+    returns = _iid_returns()
+    rf_series = pd.Series(0.04, index=returns.index)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert "class_bucket" in captured
+    pd.testing.assert_series_equal(
+        captured["class_bucket"].sort_index(), CLASS_BUCKET.sort_index()
+    )
+    assert captured["rf_series"] is rf_series
 
 
 def test_black_litterman_strategy_rf_lookup_ignores_future_values(
