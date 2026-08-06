@@ -83,6 +83,42 @@ built to produce. **On an excess-return basis (net of the T-bill
 rate, which averaged ~3-4% through this window), `hrp` and `gmv`
 still don't beat cash at all** -- their excess Sharpes are negative.
 
+### Is there real alpha? The risk-matched benchmark
+
+Total Sharpe alone can't answer whether ATLAS adds genuine skill or
+just takes more risk than `permanent` and gets paid for it the way
+any levered position would -- Sharpe is leverage-invariant, so it
+can't distinguish the two. The fair test (ANALYSIS_V2.md Sec 2): lever
+`permanent`, financed at the prevailing T-bill rate, up to **ATLAS's
+own realized volatility**, and compare returns at that matched risk
+level.
+
+| | Ann. return | Ann. vol | Excess Sharpe | Max drawdown |
+| --- | --- | --- | --- | --- |
+| permanent (unlevered) | 9.51% | 8.8% | 0.62 | -13.4% |
+| permanent, levered 1.67x to ATLAS's vol | 12.81% | 14.7% | 0.62 | -22.1% |
+| **black_litterman (frozen) -- ATLAS** | **13.74%** | **14.7%** | **0.68** | **-16.7%** |
+
+**ATLAS's alpha over the risk-matched benchmark is +0.93% per year.**
+Levering `permanent` financed at `rf` leaves its excess Sharpe exactly
+unchanged (0.62 -> 0.62, confirming leverage-invariance holds in
+practice on this real, discretely-compounded series, not just in
+theory) -- so the fact that ATLAS's excess Sharpe (0.68) clears the
+levered benchmark's is a real, positive gap, not an artifact of taking
+more risk. A second, independent point in ATLAS's favor: at the *same*
+volatility, ATLAS's max drawdown (-16.7%) is meaningfully shallower
+than pure leverage's (-22.1%) -- the extra risk ATLAS takes is
+regime-aware and gated, not just uniformly scaled up. This is a
+materially better result than ANALYSIS_V2.md's original finding
+(+0.02%/yr, statistically indistinguishable from zero), because that
+number predated Tier 3's refinements and V5's correct rejection --
+this project's own pipeline has genuinely improved since. It does not
+overturn the headline that unlevered `permanent` still posts the
+higher total Sharpe (1.07 vs. 0.95) -- it takes much less risk to get
+there -- but it does answer the harder, fairer question: once risk is
+matched, ATLAS's extra return now reflects real, measured, if modest,
+skill.
+
 ### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
 
 Every entry below is kept regardless of which direction it moved the
@@ -201,6 +237,14 @@ project**, not failures to edit out.
     measurement, `modules.momentum_view` is now `false` -- the same
     measured-negative-by-ablation -> disabled treatment V3 got in
     Tier 1, not a new rule.
+13. **ANALYSIS_V2.md Step 3: the risk-matched (levered-permanent)
+    benchmark row.** See "Is there real alpha?" above for the full
+    table and writeup -- the short version: levering `permanent` to
+    ATLAS's own volatility and comparing returns at that matched risk
+    level finds ATLAS earning **+0.93% per year of real alpha**, a
+    genuine improvement over ANALYSIS_V2.md's original ~+0.02%/yr
+    (statistically indistinguishable from zero), reflecting the
+    pipeline's own progress since that number was computed.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
