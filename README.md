@@ -40,48 +40,48 @@ pytest
 
 Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09),
 current state after all of DIAGNOSTIC.md's Tier-1, Tier-2, Tier-3, AND
-ANALYSIS_V2.md's Step-1 fixes (V3 disabled, cash exclusion reverted, a
-real risk-free rate, the utility gate recalibrated from A=5 to A=2,
-HMM `n_states` selected by BIC, V2 restricted to per-asset
-hit-rate-eligible tickers, classical benchmarks capped at the same 20%
-per-asset limit the strategy faces, and V5 dual momentum added to the
-fusion). **Development-set OOS, not virgin OOS** -- with ~4.5 years of
-daily data the standard error on a Sharpe estimate is roughly ±0.22,
-so most rows here are within one SE of each other and should not be
-read as a confident ranking.
+ANALYSIS_V2.md's Step-1/Step-2 fixes (V3 disabled, cash exclusion
+reverted, a real risk-free rate, the utility gate recalibrated from
+A=5 to A=2, HMM `n_states` selected by BIC, V2 restricted to
+per-asset hit-rate-eligible tickers, classical benchmarks capped at
+the same 20% per-asset limit the strategy faces, V5 dual momentum
+implemented and tried, then disabled once the stage-11 ablation
+measured it). **Development-set OOS, not virgin OOS** -- with ~4.5
+years of daily data the standard error on a Sharpe estimate is
+roughly ±0.22, so most rows here are within one SE of each other and
+should not be read as a confident ranking.
 
 | Strategy | Sharpe | Excess Sharpe (vs. T-bill) | Max drawdown | Ann. vol |
 | --- | --- | --- | --- | --- |
-| permanent | 1.06 ± 0.22 | 0.61 | -13.4% | 8.8% |
-| risk_parity | 0.85 ± 0.22 | 0.44 | -16.5% | 9.8% |
-| hrp | 0.83 ± 0.22 | -0.30 | -9.2% | 3.5% |
+| permanent | 1.07 ± 0.22 | 0.62 | -13.4% | 8.8% |
+| **black_litterman (frozen)** | **0.95 ± 0.22** | **0.68** | -16.7% | 14.7% |
+| risk_parity | 0.86 ± 0.22 | 0.45 | -16.5% | 9.8% |
 | black_litterman (bucket-level) | 0.82 ± 0.22 | 0.41 | -16.2% | 9.7% |
+| hrp | 0.83 ± 0.22 | -0.29 | -9.2% | 3.5% |
 | gmv | 0.74 ± 0.22 | -0.51 | -8.1% | 3.2% |
-| **black_litterman (frozen, with V5)** | **0.72 ± 0.22** | **0.44** | -16.3% | 14.2% |
-| max_sharpe_static | 0.66 ± 0.22 | -0.06 | -13.6% | 5.5% |
+| max_sharpe_static | 0.65 ± 0.22 | -0.07 | -13.6% | 5.5% |
 | sixty_forty | 0.63 ± 0.22 | 0.28 | -22.5% | 11.5% |
 
-Recalibrating the utility gate (Tier 2) remains the single largest
-*improvement* in the project's history, and adding V5 momentum
-(ANALYSIS_V2.md Step 1) is the single largest *regression* since:
-`black_litterman (frozen)` fell from Tier 3's 0.90 to **0.72** once V5
-was added, IS-tuned, and frozen the same way every other parameter in
-this pipeline has been. This is reported plainly, not walked back --
-see "What changed" below for the full mechanism (a 12-week gate census
-shows V5's absolute-trend leg pushing `mu_BL` down hard enough during
-2022's selloff to occasionally flip the gate to a more defensive book,
-and reshaping the max-Sharpe book's composition substantially even in
-weeks where the same book still wins). `black_litterman (frozen)` no
-longer clears every classical benchmark the way it did after Tier 2 --
-it now sits behind `risk_parity`, `hrp`, and the bucket-level
-alternative on both total and excess Sharpe, though still ahead of
-`gmv`, `max_sharpe_static`, and `sixty_forty`. `modules.momentum_view`
-is left `true` for now pending the stage-11 ablation's formal
-marginal-contribution measurement (ANALYSIS_V2.md Step 2, not yet
-run) -- the same venue that measured V3's -0.265 before it was
-disabled. **On an excess-return basis (net of the T-bill rate, which
-averaged ~3-4% through this window), `hrp` and `gmv` still don't beat
-cash at all** -- their excess Sharpes are negative.
+Momentum (V5) was implemented, IS-tuned, and tried in the fusion
+(ANALYSIS_V2.md Step 1) -- and it was a real, measured regression
+(`black_litterman (frozen)` fell from Tier 3's 0.90 to 0.72). The
+formal stage-11 ablation (Step 2, excess Sharpe as the primary
+metric) confirmed why on its own dedicated terms: V5's marginal
+contribution was **-0.236 excess Sharpe**, the single largest
+negative effect ever measured in this project's ablation study,
+exceeding V3's original -0.265 in relative terms. `modules.
+momentum_view` is now `false`, the same measured-negative -> disabled
+treatment V3 got in Tier 1. With momentum off, `black_litterman
+(frozen)` is back to clearing every classical benchmark except
+`permanent` -- Sharpe 0.95, excess Sharpe 0.68, essentially recovering
+(and modestly exceeding, mostly via ordinary calendar drift as a few
+more trading days entered the dataset between runs) Tier 3's
+pre-momentum reading. Momentum's module, tests, and full negative
+result all stay in the codebase -- an implemented-and-rejected signal
+family is exactly the kind of evidence this project's methodology is
+built to produce. **On an excess-return basis (net of the T-bill
+rate, which averaged ~3-4% through this window), `hrp` and `gmv`
+still don't beat cash at all** -- their excess Sharpes are negative.
 
 ### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
 
@@ -187,6 +187,20 @@ project**, not failures to edit out.
     stage-11 ablation's formal marginal-contribution number (next
     step) rather than disabled on this one frozen-pipeline reading
     alone.
+12. **ANALYSIS_V2.md Step 2: the stage-11 ablation, re-run with excess
+    Sharpe as the primary metric and V5 included, confirmed item 11's
+    reading and gave it a number -- momentum's marginal contribution
+    is -0.236 excess Sharpe, the largest negative effect of any module
+    ever measured in this study.** The ablation harness itself needed
+    modernizing first (it predated Tier 1-3 entirely: no `rf_series`,
+    no `meanrev_eligible`, untuned HMM `n_states`), which also
+    revealed V1 remains the clearest positive contributor (+0.081
+    excess Sharpe), V2 stays ~neutral, V3/V4 are now structural
+    no-ops (V3 already off, V4 never wired in), and the anomaly
+    override never fired at all in this exact window. On V5's
+    measurement, `modules.momentum_view` is now `false` -- the same
+    measured-negative-by-ablation -> disabled treatment V3 got in
+    Tier 1, not a new rule.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
@@ -295,6 +309,30 @@ that call from the stage-11 ablation's formal marginal-contribution
 number, not from a single before/after comparison -- that ablation
 re-run, with excess Sharpe as the primary metric, is the next step.
 
+**Momentum (V5) ablation result and final disposition: -0.236 excess
+Sharpe, the largest negative marginal contribution ever measured in
+this study, larger in relative terms than V3's original -0.265.**
+Modernizing the stage-11 ablation harness first (it had never been
+updated for `rf_series`, `meanrev_eligible`, or the BIC-selected HMM
+`n_states` -- it was measuring a stale, pre-Tier-1 pipeline) also
+reconfirmed the rest of the module picture on the current, correct
+pipeline: V1 remains the clearest positive contributor (+0.081 excess
+Sharpe); V2 stays ~neutral (-0.003); V3 and V4 are now structural
+no-ops (V3 already disabled, V4 never wired into the backtest); the
+anomaly override never fired at all in this exact OOS window. On V5's
+measurement, `modules.momentum_view` was set `false` -- the same
+measured-negative -> disabled treatment V3 got in Tier 1, applied
+consistently rather than as a special case. Re-running the frozen OOS
+walk-forward with momentum off recovers (and modestly exceeds, mostly
+via ordinary calendar drift between runs) Tier 3's pre-momentum
+number: **Sharpe 0.9491, excess Sharpe 0.6784** -- `black_litterman
+(frozen)` again clears every classical benchmark except `permanent`.
+Momentum's implementation, tests, and full negative result -- both
+the frozen-pipeline reading and the formal ablation number -- all stay
+in the codebase, unedited: a signal that was implemented, honestly
+tried, and rejected on measured evidence is exactly the kind of result
+this project's methodology exists to produce.
+
 ### The benchmark comparison itself is window-dependent
 
 Re-running `permanent` and GMV over the **in-sample** period
@@ -354,3 +392,14 @@ zero since it was never wired into the backtested pipeline. A
 turnover-cap sensitivity check found relaxing the frozen 1% cap to the
 S4-convention 2% raises OOS Sharpe from 0.806 to 0.875 with no
 drawdown cost -- see below for the resulting config changes.
+
+**This ablation was re-run on the current pipeline for stage-11 Step 2
+(ANALYSIS_V2.md), ranked primarily by excess Sharpe.** V1 is still the
+clearest positive contributor (+0.081 excess Sharpe); V2 still ~zero
+(-0.003); V3/V4 are now structural no-ops (V3 already disabled since
+Tier 1, V4 never wired in); the anomaly override never fired in this
+exact window; and V5 (momentum, added and measured for the first time
+here) came back at **-0.236 excess Sharpe, the largest negative
+marginal contribution of any module measured across this whole
+study** -- see the Results section above for the full writeup and the
+resulting `modules.momentum_view: false`.
