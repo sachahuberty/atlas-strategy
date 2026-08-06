@@ -72,14 +72,24 @@ modules:                           # ablation on/off flags
                                     # and its tests are kept intact as a
                                     # documented negative result, not deleted.
   sentiment_view: true             # V4
-  momentum_view: true              # V5 (ANALYSIS_V2.md Sec 5/6 action 1):
+  momentum_view: false             # V5 (ANALYSIS_V2.md Sec 5/6 action 1):
                                     # dual momentum (12-1 cross-sectional
-                                    # rank + absolute trend-vs-cash gate),
-                                    # the one course-covered factor (S4)
-                                    # never implemented, and the only
-                                    # signal family whose own IS-only
-                                    # validation raised return in both
-                                    # windows and cut drawdown.
+                                    # rank + absolute trend-vs-cash gate).
+                                    # An IS-only standalone harness (ANALYSIS_
+                                    # V2.md 5.1) suggested a real edge, and it
+                                    # was the one course-covered factor (S4)
+                                    # this project hadn't implemented -- but
+                                    # once wired into the actual BL fusion +
+                                    # utility gate, stage 11's ablation
+                                    # (notebook 11, re-run 2026-08-06) measured
+                                    # a marginal EXCESS-Sharpe contribution of
+                                    # -0.236, the largest negative effect of
+                                    # any module ever measured in this study
+                                    # (bigger, in relative terms, than V3's
+                                    # original -0.265). Disabled on that
+                                    # measurement, same precedent as V3: the
+                                    # module, its tests, and the full negative
+                                    # result stay in the repo, not deleted.
   anomaly_override: true
   execution_timing: true
   bucket_level: false              # S11 Tier 2: when true, notebooks build
