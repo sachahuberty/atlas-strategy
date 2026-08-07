@@ -267,6 +267,26 @@ project**, not failures to edit out.
     None of these changes affect the frozen OOS number -- `n_states=4`
     was already what every notebook 09/11 run since Tier 3 has used in
     practice; this just makes `config.yaml` stop contradicting it.
+15. **ANALYSIS_V2.md Step 5: deliverable hygiene.** New `src/atlas/
+    plotting.py` (`equity_curves`, `drawdown_curves`,
+    `weight_evolution`, `marginal_contribution_bars`, 6 tests) replaces
+    hand-rolled matplotlib in notebook 09's chart cells; the four
+    canonical figures now export to `reports/figures/` and a
+    machine-readable `results_summary.json` (comparison table,
+    risk-matched alpha, every frozen parameter) to `reports/results/`
+    -- both were empty placeholders before. `strategy.py`'s superseded
+    stage 3/5/6 wrappers (`regime_switching_strategy`, `with_
+    meanreversion_tilt`, `with_technical_view`, `technical_phase_
+    flags`) moved to `strategy_legacy.py` with their tests
+    (`test_strategy_legacy.py`), and every notebook that referenced
+    them updated to import from the new location. Stage 4/7
+    (`with_anomaly_override`, `with_sentiment_view`) stayed in
+    `strategy.py` -- both are still live, not superseded, despite
+    ANALYSIS_V2.md's "stages 3-7" framing grouping them with the
+    others. **Scope note:** `plotting.py` was wired into notebook 09
+    only; notebook 11's equity-curve and marginal-contribution charts
+    still hand-roll the same patterns -- a natural, low-risk follow-up
+    not done in this pass given the time budget.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A

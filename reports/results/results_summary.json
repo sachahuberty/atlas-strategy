@@ -1,0 +1,161 @@
+{
+  "generated": "2026-08-07T10:56:54.351281",
+  "oos_window": {
+    "start": "2022-01-01",
+    "end": "2026-08-06"
+  },
+  "comparison_table": {
+    "black_litterman_frozen": {
+      "ann_return": 0.1365,
+      "ann_vol": 0.147,
+      "sharpe": 0.9439,
+      "excess_sharpe": 0.6732,
+      "sortino": 0.8949,
+      "calmar": 0.818,
+      "max_drawdown": -0.1668,
+      "hit_rate": 0.5486,
+      "avg_weekly_turnover": 0.0151,
+      "total_cost_drag": 0.0036
+    },
+    "black_litterman_bucket": {
+      "ann_return": 0.0772,
+      "ann_vol": 0.0972,
+      "sharpe": 0.8141,
+      "excess_sharpe": 0.4044,
+      "sortino": 0.7873,
+      "calmar": 0.4768,
+      "max_drawdown": -0.162,
+      "hit_rate": 0.5503,
+      "avg_weekly_turnover": 0.0129,
+      "total_cost_drag": 0.0031
+    },
+    "permanent": {
+      "ann_return": 0.0953,
+      "ann_vol": 0.0882,
+      "sharpe": 1.0766,
+      "excess_sharpe": 0.6251,
+      "sortino": 1.0421,
+      "calmar": 0.7115,
+      "max_drawdown": -0.1339,
+      "hit_rate": 0.5495,
+      "avg_weekly_turnover": 0.0068,
+      "total_cost_drag": 0.0016
+    },
+    "sixty_forty": {
+      "ann_return": 0.067,
+      "ann_vol": 0.1151,
+      "sharpe": 0.6208,
+      "excess_sharpe": 0.2748,
+      "sortino": 0.624,
+      "calmar": 0.2983,
+      "max_drawdown": -0.2245,
+      "hit_rate": 0.5269,
+      "avg_weekly_turnover": 0.0039,
+      "total_cost_drag": 0.0009
+    },
+    "max_sharpe_static": {
+      "ann_return": 0.0348,
+      "ann_vol": 0.0552,
+      "sharpe": 0.6473,
+      "excess_sharpe": -0.0742,
+      "sortino": 0.6539,
+      "calmar": 0.2568,
+      "max_drawdown": -0.1355,
+      "hit_rate": 0.5234,
+      "avg_weekly_turnover": 0.0027,
+      "total_cost_drag": 0.0006
+    },
+    "gmv": {
+      "ann_return": 0.0234,
+      "ann_vol": 0.0319,
+      "sharpe": 0.741,
+      "excess_sharpe": -0.5097,
+      "sortino": 0.7441,
+      "calmar": 0.2893,
+      "max_drawdown": -0.0808,
+      "hit_rate": 0.5295,
+      "avg_weekly_turnover": 0.0057,
+      "total_cost_drag": 0.0014
+    },
+    "risk_parity": {
+      "ann_return": 0.082,
+      "ann_vol": 0.0978,
+      "sharpe": 0.8546,
+      "excess_sharpe": 0.4476,
+      "sortino": 0.8348,
+      "calmar": 0.4957,
+      "max_drawdown": -0.1654,
+      "hit_rate": 0.546,
+      "avg_weekly_turnover": 0.0061,
+      "total_cost_drag": 0.0015
+    },
+    "hrp": {
+      "ann_return": 0.0291,
+      "ann_vol": 0.0353,
+      "sharpe": 0.829,
+      "excess_sharpe": -0.2983,
+      "sortino": 0.8264,
+      "calmar": 0.3165,
+      "max_drawdown": -0.0919,
+      "hit_rate": 0.5399,
+      "avg_weekly_turnover": 0.0047,
+      "total_cost_drag": 0.0011
+    }
+  },
+  "risk_matched": {
+    "leverage": 1.6675,
+    "alpha_annual": 0.007973,
+    "table": {
+      "permanent": {
+        "ann_return": 0.0953,
+        "ann_vol": 0.0882,
+        "sharpe": 1.0766,
+        "excess_sharpe": 0.6251,
+        "sortino": 1.0421,
+        "max_drawdown": -0.1339
+      },
+      "permanent (levered 1.67x to ATLAS's vol)": {
+        "ann_return": 0.1285,
+        "ann_vol": 0.147,
+        "sharpe": 0.8959,
+        "excess_sharpe": 0.6251,
+        "sortino": 0.8656,
+        "max_drawdown": -0.2208
+      },
+      "black_litterman_frozen (ATLAS)": {
+        "ann_return": 0.1365,
+        "ann_vol": 0.147,
+        "sharpe": 0.9439,
+        "excess_sharpe": 0.6732,
+        "sortino": 0.8949,
+        "max_drawdown": -0.1668
+      }
+    }
+  },
+  "frozen_params": {
+    "hmm_n_states": 4,
+    "meanreversion": {
+      "lookback_days": 20,
+      "entry_z": 2.0
+    },
+    "momentum": {
+      "lookback_days": 189,
+      "skip_days": 0,
+      "trend_lookback_days": 252,
+      "top_fraction": 0.5,
+      "max_view_magnitude": 0.03
+    },
+    "modules": {
+      "regime_view": true,
+      "meanreversion_view": true,
+      "technical_view": false,
+      "sentiment_view": false,
+      "momentum_view": false,
+      "anomaly_override": true,
+      "execution_timing": false,
+      "bucket_level": false
+    },
+    "gate": "utility",
+    "risk_aversion_for_utility_gate": 2
+  }
+}
