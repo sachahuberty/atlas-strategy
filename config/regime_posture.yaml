@@ -6,9 +6,12 @@
 postures:
   risk_on:
     profile: { vol: low, mean_return: high }
-    # Stage 8 will swap this for the true BL posterior (max_sharpe_bl);
-    # until then this is a naive proxy on plain historical mu/cov, per
-    # PROJECT_STRUCTURE.md 5.1: "until here, views can combine naively".
+    # A naive proxy on plain historical mu/cov (PROJECT_STRUCTURE.md
+    # 5.1's "views can combine naively" phase). These posture methods
+    # are used only by the superseded strategy.regime_switching_
+    # strategy (stages 3-7); the current pipeline (strategy.
+    # black_litterman_strategy, stage 8+) fuses the real BL posterior
+    # instead and never reads allocation_method here.
     allocation_method: max_sharpe
   neutral:
     profile: { vol: medium, mean_return: medium }

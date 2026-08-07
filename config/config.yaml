@@ -71,7 +71,18 @@ modules:                           # ablation on/off flags
                                     # that measurement, not a guess. The module
                                     # and its tests are kept intact as a
                                     # documented negative result, not deleted.
-  sentiment_view: true             # V4
+  sentiment_view: false            # V4 (ANALYSIS_V2.md Sec 4.2): live-only
+                                    # (see sentiment.py) -- structurally
+                                    # absent from strategy.black_litterman_
+                                    # strategy's view_sets regardless of this
+                                    # flag's value, since free news sources
+                                    # have no historical archive to backtest
+                                    # against. False here so the config
+                                    # doesn't read as if V4 were live in the
+                                    # backtest; flip true only for an actual
+                                    # live/forward loop that re-scrapes and
+                                    # passes a fresh bucket_scores snapshot
+                                    # via strategy.with_sentiment_view.
   momentum_view: false             # V5 (ANALYSIS_V2.md Sec 5/6 action 1):
                                     # dual momentum (12-1 cross-sectional
                                     # rank + absolute trend-vs-cash gate).
@@ -91,7 +102,21 @@ modules:                           # ablation on/off flags
                                     # module, its tests, and the full negative
                                     # result stay in the repo, not deleted.
   anomaly_override: true
-  execution_timing: true
+  execution_timing: false          # ANALYSIS_V2.md Sec 4.1: `strategy.
+                                    # technical_phase_flags` (the S12
+                                    # execution-timing hook) has never
+                                    # actually been passed into `backtest.
+                                    # run` from notebook 09's canonical OOS
+                                    # walk-forward -- `phase_flags_fn`
+                                    # appears zero times there, across
+                                    # three review cycles, while this flag
+                                    # claimed it was on the whole time.
+                                    # It also keys off V3's resistance
+                                    # zones, so it is incoherent by
+                                    # construction while technical_view is
+                                    # off. False here so the config
+                                    # describes the experiment actually
+                                    # run, not an aspirational one.
   bucket_level: false              # S11 Tier 2: when true, notebooks build
                                     # strategy.bucket_black_litterman_strategy
                                     # (BL fused at the 4-bucket level) instead
@@ -105,7 +130,24 @@ modules:                           # ablation on/off flags
 regimes:
   market_ticker: ACWI               # broad-market proxy the HMM is fit on
   hmm:
-    n_states: 3
+    n_states: 4                     # S11 Tier 3 / ANALYSIS_V2.md Sec 4.3:
+                                     # was a fixed, untuned 3 through stage
+                                     # 10. regimes.hmm_bic_curve's IS-only
+                                     # BIC selection (2010-2021, candidates
+                                     # in grid_search.hmm.n_states_range)
+                                     # has picked 4 -- not 3 -- consistently
+                                     # across every re-run of notebooks
+                                     # 09/11 this stage. This value now IS
+                                     # that selection (previously the BIC
+                                     # curve was computed fresh each
+                                     # notebook run but only applied to an
+                                     # in-memory frozen_cfg, never written
+                                     # back here, leaving this default
+                                     # silently wrong); the BIC-curve cells
+                                     # stay in both notebooks as the
+                                     # diagnostic audit trail, same
+                                     # convention as meanreversion.
+                                     # lookback_days/entry_z below.
     features: [returns, rolling_vol]
     vol_window_days: 21             # ~1 trading month, for rolling_vol
     lookback_days: 1260             # ~5Y training window, ~a few regime cycles

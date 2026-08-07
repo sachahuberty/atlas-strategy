@@ -245,6 +245,28 @@ project**, not failures to edit out.
     genuine improvement over ANALYSIS_V2.md's original ~+0.02%/yr
     (statistically indistinguishable from zero), reflecting the
     pipeline's own progress since that number was computed.
+14. **ANALYSIS_V2.md Step 4: config/behavior mismatches that were
+    quietly making the config lie about the experiment, fixed.**
+    `modules.execution_timing` set `false` (`phase_flags_fn` has never
+    once been passed into `backtest.run` from notebook 09's canonical
+    OOS walk-forward, and it keys off V3's resistance zones, which are
+    off anyway -- the flag claimed a feature was live that never ran).
+    `modules.sentiment_view` set `false` (V4 is structurally absent
+    from `black_litterman_strategy`'s view_sets regardless of this
+    flag; live/forward use goes through `with_sentiment_view` directly
+    and doesn't read it). `regimes.hmm.n_states` set to **4**, not 3:
+    `regimes.hmm_bic_curve`'s IS-only selection has consistently picked
+    4 across every re-run this stage, but that selection was only ever
+    applied to an in-memory `frozen_cfg`, never written back to
+    `config.yaml` -- leaving the on-disk default silently wrong while
+    the README claimed `n_states` was "selected by BIC." A stale
+    `regime_posture.yaml` comment referencing "stage 8 will swap this"
+    (stage 8 shipped many commits ago) was also corrected to describe
+    what's actually true: those posture methods belong to the
+    superseded `regime_switching_strategy`, not the current pipeline.
+    None of these changes affect the frozen OOS number -- `n_states=4`
+    was already what every notebook 09/11 run since Tier 3 has used in
+    practice; this just makes `config.yaml` stop contradicting it.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
