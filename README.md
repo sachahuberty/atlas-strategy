@@ -119,6 +119,79 @@ there -- but it does answer the harder, fairer question: once risk is
 matched, ATLAS's extra return now reflects real, measured, if modest,
 skill.
 
+### Does the alpha survive out of its window? No -- and that is the honest headline (ANALYSIS_V3.md Sec 3)
+
+The alpha claim above is real *in the OOS window*, but it is exactly
+that: a property of 2022-2026, not a property of the strategy. Running
+the identical frozen pipeline over 2014-2021 (independently
+reproduced from this repo's own cached data, not copied from the
+external review that first raised this) gives a very different
+picture:
+
+| 2014-2021 (in-sample) | Ann. return | Ann. vol | Excess Sharpe | Max drawdown |
+| --- | --- | --- | --- | --- |
+| permanent | 3.73% | 7.4% | **0.43** | **-18.5%** |
+| black_litterman (frozen) -- ATLAS | 4.10% | 13.3% | 0.31 | **-31.1%** |
+
+**In-sample, ATLAS narrowly beats permanent on raw return (4.10% vs.
+3.73%) but loses decisively on the metric that actually matters --
+excess Sharpe (0.31 vs. 0.43) -- while taking on a max drawdown nearly
+double permanent's (-31.1% vs. -18.5%).** This is the same
+"regime-dependent, not persistent" shape DIAGNOSTIC.md's original
+IS/OOS reframe found for `permanent` vs. `GMV` (Sec 5.3 below): a
+number that looks compelling in one window and reverses in the other.
+The honest, publishable claim is not "ATLAS has alpha" -- it is
+**"ATLAS beat a risk-matched Permanent in 2022-2026 and lost to it in
+2014-2021."** Both windows are kept, neither is cherry-picked, and the
+in-sample result is the real out-of-sample test this project's own
+"development-set OOS, not virgin OOS" framing (top of this section)
+already flagged as necessary.
+
+### Self-calibrating delta: tested, and it makes things worse in both windows (ANALYSIS_V3.md Sec 4/6.2)
+
+`black_litterman.delta=2.5` is the textbook equity-market-calibrated
+constant, but this project's "market" (the `permanent()` proxy fed
+into `equilibrium_returns`) is a 25%-equity, ~8% vol multi-asset
+blend -- a fixed equity delta on a much lower-vol market understates
+the implied equilibrium risk premium, and does so more severely as
+real rates rise. `allocation.implied_risk_aversion` implements the
+textbook fix (delta = trailing market excess return / trailing market
+variance, recomputed weekly, config-gated via `black_litterman.
+delta_mode: self_calibrating`) rather than picking a bigger fixed
+constant.
+
+**Honest result: self-calibrating delta measured worse in BOTH
+windows, more decisively than a bigger fixed constant would have.**
+
+| | OOS excess Sharpe | OOS max drawdown | IS (2014-2021) excess Sharpe | IS max drawdown |
+| --- | --- | --- | --- | --- |
+| delta = 2.5 (fixed, current) | **0.69** | -16.7% | **0.31** | -31.1% |
+| delta = self-calibrating | 0.42 | -19.8% | 0.17 | -33.7% |
+
+**Why, mechanically:** sampling `delta_t` across all 658 weekly
+decisions from 2014-2026, it ranges from **-13.2 to +22.1** (vs. the
+stable constant of 2.5) and is **negative in 199 of 658 weeks
+(30%)**. A negative delta doesn't just miscalibrate the equilibrium
+prior's *size* -- it inverts its *direction*: `Pi = delta * Sigma *
+w_mkt` means a negative delta tells the model that riskier,
+higher-covariance assets should have *lower* expected returns than
+safer ones, backwards from the CAPM logic Black-Litterman's
+equilibrium anchor exists to encode. This happens whenever the
+trailing 3-year market-proxy return dips below the risk-free rate --
+not a rare edge case at this window length, but a real ~30% of the
+time in both the IS and OOS samples. Realized trailing returns are a
+much noisier estimator than the constant Black-Litterman was designed
+to replace them with in the first place; self-calibrating delta
+re-introduces exactly the estimation-error problem BL's equilibrium
+prior exists to avoid.
+
+`black_litterman.delta_mode` stays `fixed` (the default) on this
+measurement -- not adopted, per this project's standing rule that a
+lever is only adopted when it's measured to help, and this one
+measured to hurt both windows plainly. The module, the config flag,
+and this negative result all stay in the codebase, same treatment as
+V2/V3/V5.
+
 ### What changed, in order, each re-validated by re-running the full frozen OOS walk-forward
 
 Every entry below is kept regardless of which direction it moved the
@@ -287,6 +360,19 @@ project**, not failures to edit out.
     only; notebook 11's equity-curve and marginal-contribution charts
     still hand-roll the same patterns -- a natural, low-risk follow-up
     not done in this pass given the time budget.
+16. **ANALYSIS_V3.md Sec 3: the alpha claim qualified with its IS
+    counterpart.** See "Does the alpha survive out of its window?"
+    above -- independently reproduced, not copied from the review that
+    raised it: ATLAS beats `permanent` on raw return but loses on
+    excess Sharpe and drawdown over 2014-2021, the mirror image of the
+    OOS story. Both windows are reported; neither is cherry-picked.
+17. **ANALYSIS_V3.md Sec 4/6.2: self-calibrating delta, implemented
+    and measured -- makes things worse in both windows.** See "Self-
+    calibrating delta" above for the full mechanism (delta went
+    negative in 30% of the 658 weeks sampled, inverting the
+    equilibrium prior's direction, not just its size). `black_
+    litterman.delta_mode` stays `fixed`; the self-calibrating path,
+    its tests, and this negative result all stay in the codebase.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A
