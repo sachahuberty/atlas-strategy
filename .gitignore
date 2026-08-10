@@ -19,6 +19,10 @@ models/*
 # Notebooks
 .ipynb_checkpoints/
 
+# Live automation: state.json and weekly outputs ARE committed (audit
+# trail), but the atomic-write temp files never are.
+live/*.tmp
+
 # Secrets
 .env
 *.key
