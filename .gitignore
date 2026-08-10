@@ -20,8 +20,11 @@ models/*
 .ipynb_checkpoints/
 
 # Live automation: state.json and weekly outputs ARE committed (audit
-# trail), but the atomic-write temp files never are.
+# trail), but the atomic-write temp files never are. report_latest.html
+# is an ephemeral copy for the CI artifact (the dated report under
+# live/weekly/<date>/ is the committed record).
 live/*.tmp
+live/report_latest.html
 
 # Secrets
 .env

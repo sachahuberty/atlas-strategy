@@ -24,6 +24,9 @@ See `PROJECT_STRUCTURE.md` for the full design document.
 - [x] Stage 9 — full walk-forward validation
 - [x] Stage 10 — Monte Carlo + stress testing
 - [x] Stage 11 — ablation study
+- [x] Live 1 — persisted portfolio state + drift reconciliation
+- [x] Live 2 — weekly runner + replay parity
+- [x] Live 3 — weekly HTML report + scheduled runner
 
 ## Setup
 
@@ -35,6 +38,53 @@ pip install -e .
 set FRED_API_KEY=your_key_here  # free key: https://fred.stlouisfed.org/docs/api/api_key.html
 pytest
 ```
+
+## Live automation (weekly runner + report)
+
+The validated backtest is also runnable forward, one week at a time. The
+live path never re-implements the decision: it calls the same
+`strategy.black_litterman_strategy` and `backtest.size_trade` the
+backtest does, and a replay-parity test asserts it reproduces the
+backtest's weights for any historical date.
+
+```bash
+# Produce one week's allocation (defaults to the most recent completed
+# week-end trading day). --dry-run computes and prints without writing.
+python scripts/run_weekly.py --dry-run --verbose
+python scripts/run_weekly.py --as-of 2026-06-05        # a specific Friday
+```
+
+A real (non-dry) run:
+
+- persists post-execution weights to `live/state.json` (atomic; this
+  file is the portfolio's memory and is committed as the audit trail),
+- writes `live/weekly/<as_of>/{allocation.csv, trades.csv,
+  diagnostics.json, report.html}`,
+- appends one row to `live/history.csv`,
+- and drops a stable copy of the report at `live/report_latest.html`
+  (gitignored; used only as the CI artifact).
+
+**The report** (`live/weekly/<as_of>/report.html`) is a single
+self-contained HTML research note -- no external CSS/JS, no network, the
+chart embedded as a base64 PNG -- so it opens from disk, over email, and
+years later, and prints cleanly to PDF. It is a **signal report, not a
+trade instruction**, and reads top to bottom as: the book (with the 20%
+cap positions flagged), the trade (turnover wanted vs executed vs cap),
+what drove it (regime, views, the utility gate, the anomaly check), and
+context. Render it directly from a run result via
+`atlas.report.render_weekly_report(...)`.
+
+**Exit codes:** `0` traded / already-run, `2` held (stale prices or rf
+unavailable -- no trade, state unchanged), `1` failed (unexpected error;
+state left byte-identical). Any non-ok outcome mutates nothing.
+
+**Scheduler:** `.github/workflows/weekly.yml` runs the above every
+Saturday 02:00 UTC (and on demand via *Run workflow*, with an optional
+`as_of`). It needs a `FRED_API_KEY` repository secret (it fails fast if
+absent rather than degrading to a false "held"), commits the results
+back on any non-failed outcome via a concurrency-guarded job, uploads
+the report as a workflow artifact regardless of outcome, and surfaces
+held vs traded vs failed as distinct annotations in the Actions tab.
 
 ## Results
 

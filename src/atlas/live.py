@@ -49,6 +49,7 @@ Public API:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import traceback
 from dataclasses import dataclass, field
@@ -58,6 +59,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import (
+    allocation,
     backtest,
     data,
     meanreversion,
@@ -346,6 +348,7 @@ def _decide(
     messages: list[str] = []
 
     # 1. Reconcile: drift last week's stored weights forward to as_of.
+    performance: dict = {"book_return": None, "permanent_return": None}
     if current_state.get("initialized"):
         stored = state_mod.weights_series(current_state)
         anchor = pd.Timestamp(current_state["weights_as_of"])
@@ -354,6 +357,21 @@ def _decide(
         )
         current = current.reindex(tickers).fillna(0.0)
         is_funding = False
+        # Realized weekly return of the held book and of the Permanent
+        # benchmark since the last decision (gross of costs) -- pure
+        # measurement, recorded for the report's context equity curve;
+        # it never feeds the decision.
+        cap = cfg["constraints"]["per_asset_cap"]
+        perm = allocation.permanent(market.class_bucket, cap=cap)
+        performance = {
+            "book_return": _realized_week_return(
+                stored, market.prices, anchor, as_of
+            ),
+            "permanent_return": _realized_week_return(
+                perm, market.prices, anchor, as_of
+            ),
+            "anchor": anchor.isoformat(),
+        }
     else:
         current = pd.Series(0.0, index=tickers)
         is_funding = True
@@ -400,6 +418,7 @@ def _decide(
             f"one-way, executed {sizing.executed_one_way:.4f}."
         )
 
+    rf_as_of = market.rf_series.dropna()
     diagnostics = {
         "as_of": as_of.isoformat(),
         "is_funding": is_funding,
@@ -414,6 +433,24 @@ def _decide(
             "cap_binding": sizing.cap_binding,
             "skipped": sizing.skipped,
         },
+        # Presentation metadata for the report (rendered, never decided
+        # on): asset-class map, the binding per-asset cap, module on/off
+        # flags, provenance, and realized returns for the context curve.
+        "class_bucket": {
+            t: str(market.class_bucket.get(t)) for t in tickers
+        },
+        "constraints": {"per_asset_cap": cfg["constraints"]["per_asset_cap"]},
+        "modules": dict(cfg["modules"]),
+        "performance": performance,
+        "data": {
+            "prices_as_of": market.last_price_date.isoformat(),
+            "rf_as_of": (
+                rf_as_of.index.max().isoformat()
+                if not rf_as_of.empty
+                else None
+            ),
+        },
+        "config_hash": _config_hash(cfg),
     }
 
     # 4. Persist (skip entirely on dry_run).
@@ -448,6 +485,28 @@ def _decide(
         diagnostics=diagnostics,
         messages=messages,
     )
+
+
+def _realized_week_return(
+    weights: pd.Series, prices: pd.DataFrame, start, end
+) -> float | None:
+    """Gross realized return of holding `weights` (fully invested,
+    drifting) from `start` to `end`, via the price ratio. Returns None
+    if either date is absent. Measurement only -- for the report's
+    context curve, never part of any decision."""
+    start, end = pd.Timestamp(start), pd.Timestamp(end)
+    if start not in prices.index or end not in prices.index:
+        return None
+    ratio = prices.loc[end] / prices.loc[start]
+    aligned = weights.reindex(prices.columns).fillna(0.0)
+    return float((aligned * ratio).sum()) - 1.0
+
+
+def _config_hash(cfg: dict) -> str:
+    """Short, stable digest of the config that produced a run, for the
+    report footer's provenance line."""
+    blob = json.dumps(cfg, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
 
 
 def _next_trading_day(as_of: pd.Timestamp) -> pd.Timestamp:
@@ -507,6 +566,7 @@ def write_run_outputs(
 
 
 def _append_history(result: RunResult, base: Path, as_of_label: str) -> None:
+    perf = result.diagnostics.get("performance", {})
     row = {
         "as_of": as_of_label,
         "status": result.status,
@@ -514,6 +574,10 @@ def _append_history(result: RunResult, base: Path, as_of_label: str) -> None:
         "one_way_wanted": result.one_way_turnover_wanted,
         "one_way_executed": result.one_way_executed,
         "cap_binding": result.cap_binding,
+        # Realized gross weekly returns accumulate into the report's
+        # context equity curve (None on funding / non-ok weeks).
+        "book_return": perf.get("book_return"),
+        "permanent_return": perf.get("permanent_return"),
         "messages": " | ".join(result.messages),
     }
     history_path = base / "history.csv"

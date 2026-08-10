@@ -2,9 +2,12 @@
 
 Prints a readable summary (posture, selected book, top holdings, the
 trade list, turnover vs cap) and exits with the PART-3 status code:
-0 ok / already-run, 1 failed, 2 held. On a successful, non-dry run it
-writes live/weekly/<as_of>/{allocation,trades,diagnostics} and appends
-a row to live/history.csv (via `atlas.live.write_run_outputs`).
+0 ok / already-run, 1 failed, 2 held. On a non-dry run it writes
+live/weekly/<as_of>/{allocation,trades,diagnostics}, appends a row to
+live/history.csv (via `atlas.live.write_run_outputs`), renders the HTML
+report, and drops a stable copy at live/report_latest.html for the CI
+artifact. It also prints a machine-readable `ATLAS_STATUS=<status>` line
+the scheduler greps to tell traded / held / failed / already-run apart.
 
 Examples:
     python scripts/run_weekly.py
@@ -14,11 +17,12 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 
 import pandas as pd
 
-from atlas import live
+from atlas import live, report
 
 
 def _format_weights(weights: pd.Series, top: int = 8) -> str:
@@ -121,8 +125,35 @@ def main(argv: list[str] | None = None) -> int:
         weekly_dir = live.write_run_outputs(result)
         if weekly_dir is not None:
             print(f"  wrote: {weekly_dir}")
+        report_path = _render_report(result)
+        print(f"  report: {report_path}")
 
+    # Machine-readable status line for the scheduler (distinguishes
+    # already_run from ok, which share exit code 0).
+    print(f"ATLAS_STATUS={result.status}")
     return result.exit_code
+
+
+def _load_history() -> pd.DataFrame | None:
+    history_path = live.LIVE_DIR / "history.csv"
+    if not history_path.exists():
+        return None
+    try:
+        return pd.read_csv(history_path)
+    except Exception:  # noqa: BLE001 - a bad history must not block the run
+        return None
+
+
+def _render_report(result: live.RunResult):
+    """Render the HTML report (degraded runs included) into the dated
+    weekly directory, and copy it to a stable path the CI artifact step
+    always finds regardless of as_of or outcome."""
+    history = _load_history()
+    report_path = report.render_weekly_report(result, history=history)
+    latest = live.LIVE_DIR / "report_latest.html"
+    latest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(report_path, latest)
+    return report_path
 
 
 if __name__ == "__main__":

@@ -1,0 +1,123 @@
+name: Weekly allocation
+
+# Saturday 02:00 UTC: after the US Friday close settles, and DST-safe
+# (UTC never shifts). Also runnable on demand with an optional as_of.
+on:
+  schedule:
+    - cron: "0 2 * * 6"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Decision date YYYY-MM-DD (blank = latest completed week)"
+        required: false
+        default: ""
+
+# One run at a time: the state file is the portfolio's memory, so two
+# concurrent runs must never race it. Do not cancel an in-progress run.
+concurrency:
+  group: atlas-live-state
+  cancel-in-progress: false
+
+# The job commits state and outputs back to the repo.
+permissions:
+  contents: write
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      # Fail loudly and early on a missing secret: a held outcome must
+      # mean "market data was not ready", never "the job was
+      # misconfigured". Do not let the run limp on to a false "held".
+      - name: Verify FRED_API_KEY is present
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          if [ -z "$FRED_API_KEY" ]; then
+            echo "::error title=Missing secret::FRED_API_KEY is not set; refusing to run (rf is load-bearing for the cash prior)."
+            exit 1
+          fi
+
+      - name: Run weekly allocation
+        id: run
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          # Via env (not inline ${{ }}) so untrusted input never reaches
+          # the shell as code.
+          AS_OF: ${{ github.event.inputs.as_of }}
+        run: |
+          # Disable errexit so a held (2) / failed (1) exit code can be
+          # captured and classified rather than aborting the step here.
+          set +e
+          ASOF_ARG=""
+          if [ -n "$AS_OF" ]; then
+            ASOF_ARG="--as-of $AS_OF"
+          fi
+          python scripts/run_weekly.py $ASOF_ARG --verbose | tee run.log
+          CODE=${PIPESTATUS[0]}
+          STATUS=$(grep '^ATLAS_STATUS=' run.log | tail -1 | cut -d= -f2)
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          case "$STATUS" in
+            ok)
+              echo "::notice title=Traded::ATLAS produced a new allocation." ;;
+            already_run)
+              echo "::notice title=Already run::No new decision this week; nothing changed." ;;
+            held)
+              echo "::warning title=Held::ATLAS HELD this week (exit 2): no trade, state unchanged. Inspect the report artifact." ;;
+            *)
+              echo "::error title=Failed::ATLAS run FAILED (exit ${CODE}). No state committed; see the log and report artifact." ;;
+          esac
+          # A failed run fails the job; held/ok/already_run pass green
+          # (the annotation above is what distinguishes them at a glance).
+          if [ "$CODE" = "1" ]; then exit 1; fi
+
+      # Always upload the report, whatever the outcome -- this is the
+      # artifact you read WHEN something went wrong.
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-weekly-report
+          path: live/report_latest.html
+          if-no-files-found: warn
+
+      # Commit only when the run did not fail. A failed run leaves
+      # state.json byte-identical (run_once's invariant), so there is no
+      # partial state to commit; skip it entirely.
+      - name: Commit results
+        if: >-
+          steps.run.outputs.status == 'ok' ||
+          steps.run.outputs.status == 'held' ||
+          steps.run.outputs.status == 'already_run'
+        env:
+          AS_OF: ${{ github.event.inputs.as_of }}
+          STATUS: ${{ steps.run.outputs.status }}
+        run: |
+          git config user.name "atlas-bot"
+          git config user.email "atlas-bot@users.noreply.github.com"
+          git add live
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            LABEL="$AS_OF"
+            if [ -z "$LABEL" ]; then LABEL="latest"; fi
+            git commit -m "live: allocation for ${LABEL} (${STATUS})"
+            git push
+          fi
