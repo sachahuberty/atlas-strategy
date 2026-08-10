@@ -89,7 +89,11 @@ from . import (
 StrategyFn = Callable[[pd.Timestamp, pd.DataFrame], pd.Series]
 
 
-def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
+def with_anomaly_override(
+    strategy_fn: StrategyFn,
+    cfg: dict,
+    record: Callable[[dict], None] | None = None,
+) -> StrategyFn:
     """Wrap any strategy_fn with the anomaly risk override (L4, S8):
     if the autoencoder flags the current window as anomalous, blend
     its weights toward a defensive plain-GMV book by
@@ -99,6 +103,12 @@ def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
     cached in between -- a lightweight stand-in for the fold-based
     walk-forward refit stage 9 will formalize with real per-fold
     persistence in models/.
+
+    `record`, if given, is called once per invocation with a JSON-
+    serializable dict describing the override decision (reconstruction
+    error vs threshold, whether it fired, the blend applied) for the
+    live runner's diagnostics sink. Default None leaves every existing
+    caller (backtest, ablation) untouched.
     """
     acfg = cfg["optimization"]
     cov_method = acfg["covariance"]
@@ -108,6 +118,10 @@ def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
 
     cache: dict = {"result": None, "fitted_at": None}
 
+    def _emit(diag: dict) -> None:
+        if record is not None:
+            record(diag)
+
     def strategy_fn_with_override(
         as_of: pd.Timestamp, window: pd.DataFrame
     ) -> pd.Series:
@@ -115,6 +129,7 @@ def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
 
         features = anomaly.build_features(window)
         if not anomaly.has_enough_history(features, cfg):
+            _emit({"active": False, "reason": "insufficient_history"})
             return base_weights
 
         stale = (
@@ -131,6 +146,7 @@ def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
                 # backtest. Keep the last good model (if any) and
                 # retry on the next refit date.
                 if cache["result"] is None:
+                    _emit({"active": False, "reason": "fit_failed"})
                     return base_weights
 
         result = cache["result"]
@@ -139,13 +155,33 @@ def with_anomaly_override(strategy_fn: StrategyFn, cfg: dict) -> StrategyFn:
         flagged = len(errors) > 0 and anomaly.is_anomalous(
             errors, result.threshold
         )[-1]
+        latest_error = float(errors[-1]) if len(errors) > 0 else None
         if not flagged:
+            _emit(
+                {
+                    "active": True,
+                    "fired": False,
+                    "recon_error": latest_error,
+                    "threshold": float(result.threshold),
+                    "fitted_at": cache["fitted_at"].isoformat(),
+                }
+            )
             return base_weights
 
         recent = window.tail(lookback)
         cov = allocation.covariance_matrix(recent, method=cov_method)
         gmv_weights = allocation.gmv(cov, cfg)
         aligned_base = base_weights.reindex(gmv_weights.index).fillna(0.0)
+        _emit(
+            {
+                "active": True,
+                "fired": True,
+                "recon_error": latest_error,
+                "threshold": float(result.threshold),
+                "blend_to_gmv": float(blend),
+                "fitted_at": cache["fitted_at"].isoformat(),
+            }
+        )
         return (1 - blend) * aligned_base + blend * gmv_weights
 
     return strategy_fn_with_override
@@ -237,6 +273,115 @@ def _resolve_delta(
     raise ValueError(f"Unknown black_litterman.delta_mode: {mode!r}")
 
 
+def _bl_diagnostics(
+    as_of: pd.Timestamp,
+    rf: float,
+    delta: float,
+    posture: str,
+    regime_result: dict | None,
+    prior: pd.Series,
+    mu_bl: pd.Series,
+    view_sets: list,
+    cov: pd.DataFrame,
+    candidates: dict[str, pd.Series],
+    selected: pd.Series,
+    bcfg: dict,
+) -> dict:
+    """Assemble a JSON-serializable snapshot of one weekly Black-
+    Litterman decision for the live runner's diagnostics sink (S8
+    explainability). A pure, read-only reduction of values already
+    computed inside `strategy_fn`: it never influences the selection,
+    and is only built when a `record` callback is supplied, so ordinary
+    backtest/ablation callers pay nothing for it.
+    """
+    tickers = prior.index
+    prior_arr = prior.to_numpy()
+
+    views_fired = []
+    for view_set in view_sets:
+        for i in range(len(view_set)):
+            p = np.asarray(view_set.p_rows[i], dtype=float)
+            support = {
+                t: float(p[j]) for j, t in enumerate(tickers) if p[j] != 0.0
+            }
+            base = float(p @ prior_arr)
+            views_fired.append(
+                {
+                    "label": view_set.labels[i],
+                    "family": view_set.labels[i].split("_")[0],
+                    "q": float(view_set.q_rows[i]),
+                    "tilt": float(view_set.q_rows[i]) - base,
+                    "confidence": float(view_set.confidence[i]),
+                    "support": support,
+                }
+            )
+
+    gate_aversion = bcfg["risk_aversion_for_utility_gate"]
+    books = {}
+    for name, w in candidates.items():
+        wa = w.reindex(mu_bl.index).fillna(0.0)
+        exp_ret = float(wa @ mu_bl)
+        vol = metrics.portfolio_vol(wa, cov)
+        books[name] = {
+            "exp_return": exp_ret,
+            "vol": vol,
+            "utility": float(
+                metrics.utility(exp_ret, vol, gate_aversion, rf=rf)
+            ),
+            "weights": {t: float(v) for t, v in wa.items()},
+        }
+
+    selected_name = None
+    for name, w in candidates.items():
+        wa = w.reindex(selected.index).fillna(0.0).to_numpy()
+        if np.allclose(wa, selected.to_numpy(), atol=1e-12):
+            selected_name = name
+            break
+    ranked = sorted((b["utility"] for b in books.values()), reverse=True)
+    utility_margin = float(ranked[0] - ranked[1]) if len(ranked) > 1 else None
+
+    regime = {"posture": posture}
+    if regime_result is not None:
+        states = regime_result["states"]
+        current_state = int(states.iloc[-1])
+        transition = regime_result["transition_matrix"].loc[current_state]
+        regime.update(
+            {
+                "current_state": current_state,
+                "state_to_posture": {
+                    int(k): v
+                    for k, v in regime_result["state_to_posture"].items()
+                },
+                "state_profiles": {
+                    int(s): {c: float(val) for c, val in row.items()}
+                    for s, row in regime_result["state_profiles"]
+                    .to_dict("index")
+                    .items()
+                },
+                "transition_row": {
+                    int(c): float(v) for c, v in transition.items()
+                },
+            }
+        )
+
+    return {
+        "as_of": as_of.isoformat(),
+        "rf": float(rf),
+        "delta": float(delta),
+        "regime": regime,
+        "equilibrium_prior": {t: float(v) for t, v in prior.items()},
+        "views_fired": views_fired,
+        "mu_bl": {t: float(v) for t, v in mu_bl.items()},
+        "candidate_books": books,
+        "gate": {
+            "type": bcfg["gate"],
+            "risk_aversion": gate_aversion,
+            "selected": selected_name,
+            "utility_margin": utility_margin,
+        },
+    }
+
+
 def black_litterman_strategy(
     class_bucket: pd.Series,
     cfg: dict,
@@ -244,6 +389,7 @@ def black_litterman_strategy(
     market_ticker: str | None = None,
     rf_series: pd.Series | None = None,
     meanrev_eligible: pd.Index | None = None,
+    record: Callable[[dict], None] | None = None,
 ) -> StrategyFn:
     """Build a `backtest.run`-compatible strategy_fn implementing the
     full Black-Litterman fusion pipeline (S4, stage 8):
@@ -319,6 +465,7 @@ def black_litterman_strategy(
             if pd.notna(looked_up):
                 rf = float(looked_up)
         market_returns = window[market_ticker]
+        regime_result = None
         if not regimes.has_enough_history(market_returns, cfg):
             posture = "neutral"
         else:
@@ -391,7 +538,16 @@ def black_litterman_strategy(
             "gmv": allocation.gmv(cov, cfg),
             "risk_parity": allocation.risk_parity(cov, cfg),
         }
-        return _select_gated_candidate(candidates, mu_bl, cov, bcfg, rf)
+        selected = _select_gated_candidate(candidates, mu_bl, cov, bcfg, rf)
+
+        if record is not None:
+            record(
+                _bl_diagnostics(
+                    as_of, rf, delta, posture, regime_result, prior, mu_bl,
+                    view_sets, cov, candidates, selected, bcfg,
+                )
+            )
+        return selected
 
     return strategy_fn
 

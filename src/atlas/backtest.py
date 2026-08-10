@@ -88,14 +88,84 @@ class BacktestResult:
     metrics: dict = field(default_factory=dict)
 
 
-def _week_end_dates(index: pd.DatetimeIndex) -> set[pd.Timestamp]:
+def week_end_dates(index: pd.DatetimeIndex) -> set[pd.Timestamp]:
     """Last available trading day of each calendar week ("Friday
-    close", or the prior trading day if Friday is a holiday)."""
+    close", or the prior trading day if Friday is a holiday).
+
+    Public so the live runner (live.py) resolves its weekly `as_of`
+    from the SAME calendar the backtester rebalances on, holidays
+    included, instead of hand-rolling a Friday calculation that Good
+    Friday and its kin would silently break.
+    """
     iso = index.isocalendar()
     grouped = pd.Series(index, index=index).groupby(
         [iso["year"], iso["week"]]
     )
     return set(grouped.max())
+
+
+# Retained as the private name a few internal call sites still use; it
+# is exactly the public function above, not a copy.
+_week_end_dates = week_end_dates
+
+
+@dataclass
+class TradeSizing:
+    """Outcome of applying the no-trade band and turnover cap to one
+    desired `trade` (S4 execution rules). Shared by `run` and the live
+    runner so the two can never drift apart on how a week's trade is
+    sized.
+
+    `executed_trade` is the trade to actually apply (a zeroed copy when
+    `skipped`); `executed_one_way` is its one-way turnover (0 when
+    skipped, the cap when `cap_binding`); `wanted_one_way` is the
+    pre-cap desired turnover, always reported so a capped or skipped
+    week is explainable after the fact.
+    """
+
+    executed_trade: pd.Series
+    executed_one_way: float
+    wanted_one_way: float
+    skipped: bool
+    cap_binding: bool
+
+
+def size_trade(
+    trade: pd.Series,
+    *,
+    is_funding: bool,
+    no_trade_band: float,
+    turnover_cap: float,
+) -> TradeSizing:
+    """Apply the S4 execution rules to `trade` (target - current):
+
+    - the very first (funding) rebalance executes in full and is EXEMPT
+      from the cap -- there is no prior-week trade to bound;
+    - otherwise a trade whose one-way turnover is below `no_trade_band`
+      is skipped entirely (don't pay costs to chase noise);
+    - a trade above `turnover_cap` is scaled down to exactly the cap;
+    - anything in between executes in full.
+
+    This is the single source of truth for trade sizing: `run` calls it
+    inside its weekly loop and `live.run_once` calls it once per real
+    week, so the live path sizes trades identically to the 4.5 years of
+    validated backtest.
+    """
+    wanted = float(trade.abs().sum() / 2.0)
+    if is_funding:
+        return TradeSizing(
+            trade, wanted, wanted, skipped=False, cap_binding=False
+        )
+    if wanted < no_trade_band:
+        return TradeSizing(
+            trade * 0.0, 0.0, wanted, skipped=True, cap_binding=False
+        )
+    if wanted > turnover_cap:
+        scaled = trade * (turnover_cap / wanted)
+        return TradeSizing(
+            scaled, turnover_cap, wanted, skipped=False, cap_binding=True
+        )
+    return TradeSizing(trade, wanted, wanted, skipped=False, cap_binding=False)
 
 
 def run(
@@ -174,24 +244,19 @@ def run(
                 if flagged and tickers.isin(flagged).any():
                     trade = trade * phase_fraction
 
-            one_way = trade.abs().sum() / 2.0
-
-            if is_first_rebalance:
-                # Funding the portfolio from cash is not "turnover" in
-                # the steady-state sense; only later rebalances are
-                # capped.
-                pending_trade = trade
-                pending_turnover = one_way
-                is_first_rebalance = False
-            elif one_way < no_trade_band:
-                pending_trade = None
-                pending_turnover = 0.0
-            else:
-                if one_way > turnover_cap:
-                    trade = trade * (turnover_cap / one_way)
-                    one_way = turnover_cap
-                pending_trade = trade
-                pending_turnover = one_way
+            # Funding the portfolio from cash is not "turnover" in the
+            # steady-state sense; only later rebalances are capped. The
+            # sizing itself lives in the shared `size_trade` helper so
+            # the live runner applies byte-identical logic.
+            sizing = size_trade(
+                trade,
+                is_funding=is_first_rebalance,
+                no_trade_band=no_trade_band,
+                turnover_cap=turnover_cap,
+            )
+            is_first_rebalance = False
+            pending_trade = None if sizing.skipped else sizing.executed_trade
+            pending_turnover = sizing.executed_one_way
 
             turnover_rows[date] = pending_turnover
 
