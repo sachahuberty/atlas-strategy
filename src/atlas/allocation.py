@@ -19,6 +19,13 @@ degenerate (cash's implied Sharpe is enormous regardless of its actual
 expected return), pulling the book toward cash by construction of the
 objective, not because of any view -- see max_sharpe's docstring.
 
+Stage 11 Step 6 (ANALYSIS_V3.md Sec 4/6.2) addition:
+implied_risk_aversion -- an optional, self-calibrating alternative to
+a fixed `black_litterman.delta`, since a constant equity-calibrated
+delta applied to a lower-volatility multi-asset "market" proxy
+understates the equilibrium risk premium once real (non-zero) rates
+are priced in.
+
 All functions return pd.Series of weights indexed by ticker:
 weights >= 0, sum to 1. Constraints (long-only, per-asset cap) come
 from config; covariance from Ledoit-Wolf shrinkage by default.
@@ -44,6 +51,10 @@ Public API (stage 3):
 Public API (stage 8):
     equilibrium_returns(market_weights, cov, delta) -> pd.Series  # Pi
     black_litterman(prior, cov, P, Q, Omega, tau) -> pd.Series    # mu_BL
+
+Public API (stage 11 Step 6):
+    implied_risk_aversion(market_returns, rf, periods_per_year,
+                           fallback) -> float
 """
 
 from __future__ import annotations
@@ -55,7 +66,7 @@ from scipy.optimize import minimize
 from scipy.spatial.distance import squareform
 from sklearn.covariance import LedoitWolf
 
-from .metrics import ann_return, portfolio_vol, utility
+from .metrics import ann_return, ann_vol, portfolio_vol, utility
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -461,6 +472,47 @@ def apply_defensive_tilt(
 
     cap = cfg["constraints"]["per_asset_cap"]
     return cap_and_renormalize(w.clip(lower=0.0), cap)
+
+
+def implied_risk_aversion(
+    market_returns: pd.Series,
+    rf: float = 0.0,
+    periods_per_year: int = TRADING_DAYS_PER_YEAR,
+    fallback: float = 2.5,
+) -> float:
+    """Self-calibrating risk-aversion coefficient (S1 CAPM / S4 BL
+    reverse optimization, ANALYSIS_V3.md Sec 4/6.2): delta = (market
+    excess return) / (market variance), computed from a trailing
+    return series of the SAME market proxy `equilibrium_returns`
+    prices (e.g. a portfolio held at `market_weights`, via
+    `portfolio_return`) -- not a fixed constant.
+
+    `delta=2.5` (the textbook default this project used through S11
+    Step 5) is calibrated for an equity market portfolio. This
+    project's "market" is the Permanent Portfolio proxy (~25% equity,
+    ~8% vol), and a fixed equity-calibrated delta on a much
+    lower-volatility multi-asset market understates the implied
+    equilibrium risk premium -- harmless near rf=0 (masked through
+    most of 2010-2021), but at real ~4-5% rates it can push
+    equilibrium expected returns for most assets below cash, which
+    the max-Sharpe objective then chases anyway (a ratio, not a
+    level, so it returns a book even when every numerator is
+    negative). Recomputing delta from the trailing window's own
+    excess return and variance keeps the equilibrium-return CALIBRATION
+    self-consistent with whatever rate regime is currently prevailing,
+    instead of frozen at a value that was only ever right for one of
+    them.
+
+    Falls back to `fallback` (the fixed default) when the trailing
+    window's variance is too small to divide by (e.g. a very short or
+    unnaturally calm window) -- a degenerate self-calibration is worse
+    than the textbook constant, not better.
+    """
+    ann_ret = ann_return(market_returns, periods_per_year)
+    ann_variance = ann_vol(market_returns, periods_per_year) ** 2
+    if ann_variance < 1e-8:
+        return fallback
+    return (ann_ret - rf) / ann_variance
 
 
 def equilibrium_returns(

@@ -78,6 +78,7 @@ from . import (
     anomaly,
     buckets,
     meanreversion,
+    metrics,
     momentum,
     regimes,
     sentiment,
@@ -211,6 +212,31 @@ def _select_gated_candidate(
     raise ValueError(f"Unknown black_litterman.gate: {gate!r}")
 
 
+def _resolve_delta(
+    market_weights: pd.Series, recent: pd.DataFrame, rf: float, bcfg: dict
+) -> float:
+    """Resolve this week's Black-Litterman delta (S11 Step 6,
+    ANALYSIS_V3.md Sec 4/6.2): a fixed constant (`bcfg["delta"]`, the
+    default) or, if `bcfg.get("delta_mode") == "self_calibrating"`,
+    `allocation.implied_risk_aversion` computed from the trailing
+    window (`recent`, the same one already used for `cov`) held at
+    `market_weights` -- see that function's docstring for the
+    rationale (a fixed equity-calibrated delta understates the
+    equilibrium risk premium for a lower-volatility multi-asset
+    "market" proxy once real rates are priced in). Missing
+    `delta_mode` defaults to "fixed" (the pre-Step-6 behavior)."""
+    mode = bcfg.get("delta_mode", "fixed")
+    if mode == "fixed":
+        return bcfg["delta"]
+    if mode == "self_calibrating":
+        aligned = market_weights.reindex(recent.columns).fillna(0.0)
+        market_returns = metrics.portfolio_return(aligned, recent)
+        return allocation.implied_risk_aversion(
+            market_returns, rf=rf, fallback=bcfg["delta"]
+        )
+    raise ValueError(f"Unknown black_litterman.delta_mode: {mode!r}")
+
+
 def black_litterman_strategy(
     class_bucket: pd.Series,
     cfg: dict,
@@ -308,8 +334,9 @@ def black_litterman_strategy(
         cov = allocation.covariance_matrix(recent, method=cov_method)
         tickers = recent.columns
 
+        delta = _resolve_delta(market_weights, recent, rf, bcfg)
         prior = allocation.equilibrium_returns(
-            market_weights.reindex(tickers).fillna(0.0), cov, bcfg["delta"]
+            market_weights.reindex(tickers).fillna(0.0), cov, delta
         )
         # Pi is ~0 for cash by construction (near-zero covariance with
         # everything), regardless of the prevailing rate -- overriding
@@ -460,8 +487,9 @@ def bucket_black_litterman_strategy(
         recent = bucket_rets.tail(lookback)
         cov = allocation.covariance_matrix(recent, method=cov_method)
 
+        delta = _resolve_delta(market_weights_bucket, recent, rf, bcfg)
         prior = allocation.equilibrium_returns(
-            market_weights_bucket, cov, bcfg["delta"]
+            market_weights_bucket, cov, delta
         )
         if "cash" in prior.index:
             prior.loc["cash"] = rf

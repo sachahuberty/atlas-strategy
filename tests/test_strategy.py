@@ -15,6 +15,7 @@ from atlas import (
     allocation,
     anomaly,
     meanreversion,
+    metrics,
     momentum,
     regimes,
     strategy,
@@ -388,6 +389,78 @@ def test_black_litterman_strategy_uses_permanent_as_market_weights(
         captured["market_weights"].sort_index(), expected.sort_index()
     )
     assert captured["delta"] == BL_CFG["black_litterman"]["delta"]
+
+
+def test_black_litterman_strategy_self_calibrating_delta(monkeypatch):
+    captured = {}
+    original = allocation.equilibrium_returns
+
+    def spy(market_weights, cov, delta):
+        captured["delta"] = delta
+        return original(market_weights, cov, delta)
+
+    monkeypatch.setattr(allocation, "equilibrium_returns", spy)
+
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["delta_mode"] = "self_calibrating"
+
+    returns = _iid_returns()
+    rf_series = pd.Series(0.03, index=returns.index)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG, rf_series=rf_series
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    lookback = cfg["optimization"]["lookback_days"]
+    recent = returns.tail(lookback)
+    market_weights = allocation.permanent(CLASS_BUCKET)
+    aligned = market_weights.reindex(recent.columns).fillna(0.0)
+    market_returns = metrics.portfolio_return(aligned, recent)
+    expected_delta = allocation.implied_risk_aversion(
+        market_returns, rf=0.03, fallback=cfg["black_litterman"]["delta"]
+    )
+
+    assert captured["delta"] == pytest.approx(expected_delta)
+    # Sanity: this fixture's synthetic data genuinely differs from the
+    # fixed constant, so this isn't accidentally testing the fallback.
+    assert captured["delta"] != cfg["black_litterman"]["delta"]
+
+
+def test_black_litterman_strategy_delta_mode_defaults_to_fixed(monkeypatch):
+    # No delta_mode key at all (matches every pre-Step-6 config/test
+    # fixture) must behave exactly as "fixed", not raise or silently
+    # self-calibrate.
+    captured = {}
+    original = allocation.equilibrium_returns
+
+    def spy(market_weights, cov, delta):
+        captured["delta"] = delta
+        return original(market_weights, cov, delta)
+
+    monkeypatch.setattr(allocation, "equilibrium_returns", spy)
+
+    cfg = copy.deepcopy(BL_CFG)
+    assert "delta_mode" not in cfg["black_litterman"]
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["delta"] == cfg["black_litterman"]["delta"]
+
+
+def test_black_litterman_strategy_unknown_delta_mode_raises():
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["delta_mode"] = "not_a_real_mode"
+
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG
+    )
+    with pytest.raises(ValueError, match="not_a_real_mode"):
+        strategy_fn(returns.index[-1], returns)
 
 
 def test_black_litterman_strategy_offers_three_candidates_to_utility_select(

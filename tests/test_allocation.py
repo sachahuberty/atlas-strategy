@@ -11,6 +11,7 @@ from atlas.allocation import (
     equilibrium_returns,
     gmv,
     hrp,
+    implied_risk_aversion,
     max_sharpe,
     mean_returns,
     permanent,
@@ -286,6 +287,35 @@ BL_TICKERS = ["A", "B"]
 BL_COV = pd.DataFrame(
     {"A": [0.04, 0.01], "B": [0.01, 0.09]}, index=BL_TICKERS
 )
+
+
+def test_implied_risk_aversion_matches_hand_computed_formula():
+    from atlas.metrics import ann_return, ann_vol
+
+    rng = np.random.default_rng(7)
+    market_returns = pd.Series(rng.normal(0.0005, 0.008, 500))
+    rf = 0.02
+
+    delta = implied_risk_aversion(market_returns, rf=rf)
+
+    expected = (ann_return(market_returns) - rf) / ann_vol(market_returns) ** 2
+    assert delta == pytest.approx(expected)
+
+
+def test_implied_risk_aversion_falls_back_on_near_zero_variance():
+    constant_returns = pd.Series([0.0004] * 300)
+    delta = implied_risk_aversion(constant_returns, rf=0.02, fallback=2.5)
+    assert delta == 2.5
+
+
+def test_implied_risk_aversion_decreases_with_higher_rf():
+    rng = np.random.default_rng(11)
+    market_returns = pd.Series(rng.normal(0.0005, 0.008, 500))
+
+    low_rf_delta = implied_risk_aversion(market_returns, rf=0.0)
+    high_rf_delta = implied_risk_aversion(market_returns, rf=0.05)
+
+    assert high_rf_delta < low_rf_delta
 
 
 def test_equilibrium_returns_known_formula():

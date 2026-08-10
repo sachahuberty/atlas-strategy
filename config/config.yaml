@@ -250,7 +250,21 @@ momentum:
 black_litterman:
   tau: 0.05
   delta: 2.5                        # risk-aversion / equilibrium calibration
-                                     # (classic BL default)
+                                     # (classic BL default). Used as-is when
+                                     # delta_mode: fixed; used as the
+                                     # fallback (near-zero-variance weeks)
+                                     # when delta_mode: self_calibrating.
+  delta_mode: fixed                 # S11 Step 6 (ANALYSIS_V3.md Sec 4/6.2):
+                                     # "fixed" (default, this constant) or
+                                     # "self_calibrating" (allocation.
+                                     # implied_risk_aversion, recomputed
+                                     # weekly from the trailing market-
+                                     # proxy excess return/variance instead
+                                     # of a fixed equity-calibrated
+                                     # constant applied to a lower-vol
+                                     # multi-asset "market"). Default is
+                                     # "fixed" pending the honest IS/OOS
+                                     # measurement this flag exists to run.
   regime_view_magnitude: 0.03        # V1's asset-class-level return tilt
   risk_aversion_for_utility_gate: 2  # which of optimization.risk_aversion_levels
                                      # decides the BL-vs-defensive utility gate.
