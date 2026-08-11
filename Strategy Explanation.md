@@ -1,0 +1,253 @@
+# ATLAS — Strategy Explanation
+
+**A plain-language walkthrough of what this project does and how the strategy works.**
+
+Author: Sacha Huberty · IE MBDS, Algorithmic Trading
+
+---
+
+## 1. What this project is in one paragraph
+
+ATLAS is a **systematic multi-asset allocation strategy**. Every Friday after the close it decides how to split a portfolio across roughly twenty exchange-traded funds covering global equities, bonds, commodities and cash, and it places the resulting trades the following Monday. The decision is fully rules-based — no discretion, no human override. What makes it more than a simple rebalancing rule is that it combines several independent sources of opinion (a market-regime model, a mean-reversion signal, and others that were tested and rejected) into a single portfolio using **Black-Litterman**, the same framework institutional allocators use to blend house views with market equilibrium. The project also includes an unusually strict validation process, which turned out to matter more than the strategy itself.
+
+---
+
+## 2. The core idea
+
+Most allocation strategies fall into one of two camps:
+
+- **Static allocations** (60/40, the Permanent Portfolio) — fix the weights, rebalance periodically, ignore the news. Robust, cheap, hard to beat.
+- **Tactical allocations** — try to shift weights based on forecasts. Higher potential, but forecasting is difficult and the errors compound through an optimizer.
+
+ATLAS is tactical, but built to fail gracefully. The design principle is:
+
+> **Start from a sensible neutral portfolio. Only move away from it to the extent you have a genuine, quantified reason — and size the move by how confident you are in that reason.**
+
+This is exactly what Black-Litterman was invented to do, and it is why the whole architecture is organised around it. If every signal is silent in a given week, the portfolio simply sits at its neutral allocation. Signals do not *replace* the baseline; they *tilt* it.
+
+---
+
+## 3. The investment universe
+
+Twenty-two liquid US-listed ETFs, grouped into five asset-class buckets:
+
+| Bucket | Holdings |
+|---|---|
+| **Equity** | ACWI, EFA, IWM, QQQ, SPY, VEA, VTI, VWO |
+| **Fixed income** | AGG, BSV, HYG, IEF, LQD, SHY, TIP, TLT |
+| **Commodity** | DBC, GLD, SLV, USO |
+| **Cash** | BIL (1–3 month T-bills) |
+| **Real estate** | VNQ |
+
+These are not hand-picked. A screening step filters a candidate pool on minimum history, data completeness, and correlation (keeping one representative per cluster of near-identical funds). The universe is fixed as of 31 December 2021 using only data available at that date, so nothing is selected with hindsight.
+
+**Constraints, applied at all times:** long-only, fully invested (weights sum to 100%), and a **maximum 20% in any single asset**. The 20% cap turns out to matter a lot — see §9.
+
+---
+
+## 4. One week in the life of the strategy
+
+This is the heart of the project. Everything below happens automatically each Friday, using only information available at that Friday's close.
+
+### Step 1 — Read the market's mood
+
+A **Hidden Markov Model** is fitted to the last five years of daily returns and volatility of a broad global equity index (ACWI). An HMM is a statistical model that assumes the market is always in one of a small number of unobservable "states" — calm and rising, volatile and falling, and so on — and infers which state we are most likely in today, along with the probability of switching between states.
+
+Four states are used; the number was chosen by a statistical criterion (BIC), not by hand. Each fitted state is then labelled by its *characteristics* — average return and volatility — rather than by its arbitrary index number. This detail matters: the model is refitted regularly, and "state 2" might mean something completely different after a refit. Labelling by profile keeps the meaning stable.
+
+The output is a single **posture**: risk-on, neutral, or risk-off.
+
+*Why an HMM rather than simpler clustering:* an HMM models the *sequence*, so it has a built-in tendency to stay in a state rather than flip back and forth. That persistence matters when regime changes trigger trades, because every flip costs money.
+
+### Step 2 — Establish the neutral starting point
+
+Before forming any opinion, the strategy asks: *what returns would each asset need to offer for the neutral portfolio to already be optimal?*
+
+This is **reverse optimisation**. Given a reference allocation (here, an equally-weighted split across the four main buckets) and the observed covariances between assets, you can back out the expected returns implied by that allocation. These are the **equilibrium returns** — the market's implicit view, before we add anything of our own.
+
+One adjustment: cash's implied return comes out near zero by construction, because cash barely moves with anything else. Since T-bills actually paid 4–5% through much of the test period, the cash bucket's equilibrium return is overridden with the **actual 13-week T-bill yield** from the Federal Reserve's database. Without this, the model would systematically misprice the single most reliable asset in the universe.
+
+### Step 3 — Form opinions ("views")
+
+Each signal module produces a **view**: a statement of the form *"asset X will return Y% over the coming period"*, accompanied by a confidence level.
+
+Two views are active in the current configuration:
+
+- **V1 — Regime view.** If the HMM says risk-on, equities are assigned an expected return 3 percentage points above equilibrium. If risk-off, bonds and commodities get the boost instead. If neutral, no view is expressed at all. This operates at the asset-class level, which is the natural granularity for a regime signal.
+- **V2 — Mean-reversion view.** For assets that have stretched unusually far from their recent trend, the model expects partial reversion. This is filtered heavily: the asset must pass a statistical stationarity test (Augmented Dickey-Fuller), have a reversion half-life under 60 days, not be in an unusual volatility spike, and — critically — belong to the subset of tickers that historically showed genuine reversion behaviour (8 of 22 qualified, tested on in-sample data only).
+
+Three further view families were built, measured, and switched off. That story is §8.
+
+### Step 4 — Blend views with the neutral baseline
+
+**Black-Litterman** combines the equilibrium returns from Step 2 with the views from Step 3 into one revised set of expected returns.
+
+The intuition is Bayesian. The equilibrium returns are the prior belief. Each view is new evidence with a stated precision. The output — the posterior — sits between the two, pulled toward each view in proportion to its confidence and away from it in proportion to its uncertainty. Practically:
+
+- A high-confidence view about equities moves the equity expectation substantially, and — because assets are correlated — nudges related assets too.
+- A low-confidence view barely registers.
+- **No views at all means the posterior equals the prior**: the strategy holds the neutral portfolio.
+
+That last property is the reason Black-Litterman was chosen over simply averaging signals or feeding them into a machine-learning model. Naive combinations of noisy forecasts produce wild, unstable portfolios when fed into an optimiser — a well-documented failure of classical mean-variance optimisation. Black-Litterman is structurally protected against it.
+
+### Step 5 — Build the portfolio
+
+Three candidate portfolios are constructed from the revised expected returns and the covariance matrix (estimated over three years, with Ledoit-Wolf shrinkage to reduce estimation noise):
+
+1. **Maximum Sharpe** — the highest risk-adjusted return, using the blended expectations.
+2. **Global Minimum Variance** — the lowest-risk portfolio, ignoring return forecasts entirely.
+3. **Risk Parity** — each asset contributes equally to total portfolio risk.
+
+All three are solved numerically (sequential quadratic programming) subject to the long-only, fully-invested, 20%-cap constraints.
+
+A **utility gate** then picks one. Each candidate is scored on the classic mean-variance utility — expected excess return minus a penalty proportional to variance — and the winner is held. The penalty parameter (risk aversion) is set to 2. In the current configuration the maximum-Sharpe portfolio wins roughly 90% of weeks; risk parity takes the remainder.
+
+*This gate has an interesting history.* It was originally set at a much higher risk aversion, which made the minimum-variance portfolio win **every single week for four and a half years** — the entire signal pipeline was being computed and then silently discarded. The strategy was, unknowingly, just a minimum-variance fund. Recalibrating this one parameter was the largest single improvement in the project.
+
+### Step 6 — The emergency brake
+
+Separately, an **autoencoder** — a neural network trained to compress and reconstruct recent market behaviour — monitors five-day windows of returns. When current market behaviour is so unusual that the network reconstructs it badly (reconstruction error above the 99th percentile of its training range), the portfolio is switched to the defensive minimum-variance allocation.
+
+The logic: the network learns what "normal" looks like from history. When it can no longer reproduce what it is seeing, something structurally unusual is happening — a reason to de-risk regardless of what any other signal says. In practice this fires on about 2% of days and has had a negligible measured effect. It is retained because it is cheap and its failure mode is conservative.
+
+### Step 7 — Trade slowly and cheaply
+
+The target portfolio is not implemented immediately. Three execution rules apply:
+
+- **No-trade band (0.5%)** — if the gap between current and target weights is trivial, do nothing. Avoids paying costs to chase noise.
+- **Turnover cap (2% per week, one-way)** — no more than 2% of the portfolio may change hands in any week. A full repositioning therefore takes several weeks.
+- **Next-day execution** — the decision uses Friday's close; the trade executes at Monday's open. Costs of 10 basis points are charged on every trade.
+
+The turnover cap is set as a **policy**, not optimised. An earlier version let a parameter search choose it, and the search picked the most restrictive setting available — because a criterion that rewards stability will always reward doing nothing. That configuration throttled every upstream signal into irrelevance. Setting it by policy at the 2% convention taught in the course fixed it, and was the second-largest improvement in the project.
+
+---
+
+## 5. Summary of the weekly decision
+
+```
+Friday close
+    │
+ 1. HMM reads market state ──────────────► posture (risk-on / neutral / risk-off)
+    │
+ 2. Reverse-optimise neutral portfolio ──► equilibrium expected returns
+    │                                       (cash priced at the real T-bill rate)
+    │
+ 3. Signals form views ──────────────────► V1 regime tilt, V2 mean-reversion
+    │
+ 4. Black-Litterman blends 2 + 3 ────────► revised expected returns
+    │
+ 5. Build 3 candidate portfolios ────────► max-Sharpe / min-variance / risk-parity
+    │  utility gate picks one
+    │
+ 6. Autoencoder anomaly check ───────────► if abnormal, switch to defensive
+    │
+ 7. Apply no-trade band + 2% turnover cap
+    │
+Monday open — execute, pay 10 bps
+```
+
+---
+
+## 6. How the strategy is prevented from fooling itself
+
+This is where most of the project's effort went, and it is the part worth defending in an interview.
+
+**Strict time separation.** Data from 2010–2021 is the design period. Everything — parameter choices, filters, model settings — was decided using only that window. The 2022–2026 period is the test. The finalised configuration was run through it once.
+
+**No lookahead.** A decision dated Friday may only use data available at that Friday's close. Every model is fitted on trailing windows; every data transformation is checked for accidental forward-looking. There is an explicit unit test — shift the entire price history forward by one day and confirm the strategy's decisions change accordingly — that would fail if future information leaked in anywhere.
+
+**Realistic costs.** Transaction costs, turnover limits, and next-day execution are all modelled. Returns are reported net.
+
+**Walk-forward evaluation.** Performance is reported per quarter across the test period, not as a single aggregate, so a result driven by one lucky quarter is visible.
+
+**Ablation study.** Every signal module can be switched off independently. The strategy is re-run with each one disabled to measure its individual contribution. This is the project's referee, and it overruled several design decisions.
+
+**Excess-return reporting.** All performance is reported both gross and net of the risk-free rate. In a period when cash paid 4–5%, a strategy returning 4% is not a good strategy, and total-return Sharpe ratios hide this.
+
+---
+
+## 7. Results
+
+Test period: January 2022 to July 2026, out of sample, net of costs.
+
+| Strategy | Return | Volatility | Sharpe | Sharpe vs. cash | Max drawdown |
+|---|---|---|---|---|---|
+| Permanent Portfolio (benchmark) | 9.5% | 8.8% | 1.07 | 0.62 | −13.4% |
+| **ATLAS** | **13.7%** | **14.7%** | **0.95** | **0.68** | **−16.7%** |
+| Risk parity | — | 9.8% | 0.86 | 0.45 | −16.5% |
+| Hierarchical risk parity | — | 3.5% | 0.83 | −0.29 | −9.2% |
+| Minimum variance | — | 3.2% | 0.74 | −0.51 | −8.1% |
+| 60/40 | 6.7% | 11.5% | 0.63 | 0.28 | −22.5% |
+
+**Reading this table honestly:**
+
+ATLAS earns the highest raw return of any book tested — 13.7% against the benchmark's 9.5%. But it does so at 14.7% volatility versus 8.8%, so the higher return is substantially compensation for higher risk rather than pure skill.
+
+The fair comparison is to lever the benchmark up to the same volatility, financed at the T-bill rate. Doing that gives the Permanent Portfolio a 12.8% return — leaving ATLAS ahead by roughly **0.9 percentage points a year at matched risk**, with a shallower maximum drawdown (−16.7% vs −22.1%). That is the honest measure of what the strategy adds.
+
+Two caveats, both important:
+
+1. **The configuration was refined while looking at this test window.** Several decisions (which signals to disable, the risk-aversion setting) were informed by out-of-sample results. That is not the same as a clean out-of-sample test, and it should be described as a development period.
+2. **The same machinery underperforms in the design period.** Run over 2014–2021, ATLAS scores worse than the benchmark on risk-adjusted terms and suffers a −32% drawdown against the benchmark's −18%. The edge is regime-dependent, not persistent.
+
+Note also that minimum variance and hierarchical risk parity show **negative Sharpe ratios versus cash**: over this period they did not beat T-bills at all. Their attractive-looking total-return Sharpes are an artefact of measuring against a zero risk-free rate in a 5% rate environment.
+
+---
+
+## 8. What was tested and rejected
+
+Five signal families were built. Three were switched off after measurement:
+
+| Signal | Idea | Measured effect | Status |
+|---|---|---|---|
+| **V1 Regime** | HMM posture tilts asset classes | **+0.147 Sharpe** | Active |
+| **V2 Mean reversion** | Stretched assets revert | ≈ 0 | Active, heavily filtered |
+| **V3 Technical levels** | Support/resistance zones from clustered price pivots | **−0.265 Sharpe** | Disabled |
+| **V4 Sentiment** | News headline sentiment via NLP | Not backtestable | Live-only |
+| **V5 Momentum** | Dual momentum (relative + absolute trend) | **−0.236 Sharpe** | Disabled |
+
+Two of these deserve comment because they are counter-intuitive.
+
+**Technical levels failed for a diagnosable reason.** The support/resistance detector generated thousands of spurious signals on near-cash instruments like BIL and SHY, whose prices barely move — any tiny fluctuation registers as "near a level". Its hit rate on those assets was below chance.
+
+**Momentum failed despite working standalone.** Tested on its own, dual momentum improved returns in both periods and cut drawdowns meaningfully. Wired into the Black-Litterman pipeline, it measured strongly negative. The likely mechanism: when a bucket fails the trend test, every member receives a flat negative view — so in 2022, with equities *and* bonds both in downtrends simultaneously, the model placed strong negative views across most of the portfolio at once, after the losses had already occurred. A signal that works as a position rule does not necessarily work as a *return forecast*, which is what Black-Litterman consumes. This is a genuine finding about the architecture, not just a failed experiment.
+
+All three rejected modules remain in the codebase with their tests and their measured results. A signal family that was implemented properly and rejected on evidence is a result, not a failure.
+
+---
+
+## 9. Things worth knowing about how it behaves
+
+- **The portfolio is concentrated.** With a 20% cap and an optimiser that wants more concentration than that, the book typically holds exactly five positions, all at the cap. A recent snapshot: BIL, IWM, QQQ, VEA, SLV.
+- **Loosening the cap makes it worse, not better.** At a 50% cap the return collapses to 4.5%, because the unconstrained optimiser piles into low-volatility short-duration bonds. The cap is effectively forcing the strategy to take risk, not just diversifying it.
+- **Risk aversion has saturated.** Lowering the utility-gate parameter below 2 changes nothing — the max-Sharpe book already wins nearly every week. There is no dial left that buys more return.
+- **Known limitation in the expected-return model.** The reverse-optimisation step uses a standard risk-aversion constant borrowed from equity-market convention. Applied to a low-volatility multi-asset reference portfolio, it implies an equity risk premium of only about 2.1% — roughly half any credible estimate. Combined with a 5% cash rate, this means that for much of 2023–2025 the model believed almost nothing in the universe beat cash. It still produced portfolios, because the maximum-Sharpe objective optimises a ratio regardless. Correcting this constant improves test-period results but degrades design-period results, so it has not been adopted; the principled fix is to estimate it from data each week rather than fixing it by convention.
+
+---
+
+## 10. Honest summary
+
+ATLAS is a complete, working implementation of institutional multi-asset allocation machinery: regime detection, Bayesian view blending, constrained optimisation, anomaly-based de-risking, and realistic execution — validated with a rigour that is unusual outside professional research.
+
+The strategy delivers the highest raw return of any book tested and modestly beats a risk-matched benchmark over the test window. It does not beat that benchmark on risk-adjusted terms without leverage, and the edge does not replicate in the earlier period.
+
+The most valuable output is arguably not the equity curve but the evidence trail. Over the project's life the analysis discovered that the strategy had silently degenerated into a minimum-variance fund for four and a half years, that its execution layer was throttling every signal it produced, that two of its most sophisticated signals actively destroyed value, and that one apparent improvement was an artefact of the wrong performance metric. Each was found by measurement, corrected, and documented — including the ones that made results worse.
+
+The conclusion the evidence supports: **a well-diversified static allocation is a genuinely hard benchmark to beat, and the value of this kind of machinery lies less in the returns it generates than in the discipline required to know whether those returns are real.**
+
+---
+
+## Appendix — Glossary
+
+| Term | Plain meaning |
+|---|---|
+| **Black-Litterman** | A method for blending market-implied expected returns with an investor's own views, weighted by confidence |
+| **Equilibrium returns** | The expected returns implied by a reference portfolio being optimal ("reverse optimisation") |
+| **Hidden Markov Model** | A model that infers which unobservable "state" a system is in, and how likely it is to switch |
+| **Autoencoder** | A neural network trained to reproduce its input; large reproduction errors flag unusual conditions |
+| **Sharpe ratio** | Return per unit of volatility. "Excess" Sharpe measures return above cash |
+| **Ledoit-Wolf shrinkage** | A technique that stabilises a covariance matrix estimated from limited data |
+| **Ablation study** | Re-running the system with one component removed to measure that component's contribution |
+| **Walk-forward** | Evaluating performance across successive time slices rather than one aggregate figure |
+| **Turnover** | Fraction of the portfolio traded; here capped at 2% per week to control costs |
+| **Out-of-sample** | Data not used when designing the strategy — the only honest test of whether it works |
