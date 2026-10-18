@@ -36,7 +36,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from nltk import pos_tag
-from nltk.corpus import stopwords, wordnet
+from nltk.corpus import stopwords
 from nltk.sentiment import SentimentIntensityAnalyzer
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -54,7 +54,27 @@ _NLTK_RESOURCES = {
     "taggers/averaged_perceptron_tagger_eng": "averaged_perceptron_tagger_eng",
 }
 
-_PENN_TO_WORDNET = {"J": wordnet.ADJ, "V": wordnet.VERB, "R": wordnet.ADV}
+# Penn Treebank POS tag -> WordNet POS, as PLAIN STRING LITERALS rather
+# than `wordnet.ADJ` / `wordnet.VERB` / `wordnet.ADV`.
+#
+# WHY THIS MATTERS: `nltk.corpus.wordnet` is a LazyCorpusLoader, and
+# merely touching an attribute on it (even a constant like `.ADJ`)
+# triggers a corpus load, raising LookupError when the wordnet data
+# has not been downloaded. Evaluating that at MODULE level made
+# `import atlas.sentiment` -- and therefore `import atlas.strategy`,
+# which imports it, and therefore the whole live runner -- crash on any
+# machine without NLTK data. That is exactly what happened on a clean
+# GitHub Actions checkout: every scheduled run died at import time,
+# before `run_once`'s error handling could even engage, for a module
+# whose view (V4) is disabled and never used in the backtest.
+#
+# These literals are NLTK's own values, defined on WordNetCorpusReader
+# as: ADJ, ADJ_SAT, ADV, NOUN, VERB = "a", "s", "r", "n", "v".
+# `test_sentiment.py` asserts they still match, reading them off the
+# reader CLASS (which needs no downloaded corpus), so a future NLTK
+# change cannot silently desynchronise them.
+_WORDNET_NOUN = "n"
+_PENN_TO_WORDNET = {"J": "a", "V": "v", "R": "r"}
 
 BUCKET_KEYWORDS = {
     "fixed_income": [
@@ -183,7 +203,7 @@ def preprocess(text: str) -> list[str]:
     tagged = pos_tag(tokens)
     lemmatizer = WordNetLemmatizer()
     return [
-        lemmatizer.lemmatize(token, _PENN_TO_WORDNET.get(tag[0], wordnet.NOUN))
+        lemmatizer.lemmatize(token, _PENN_TO_WORDNET.get(tag[0], _WORDNET_NOUN))
         for token, tag in tagged
     ]
 

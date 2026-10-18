@@ -148,3 +148,42 @@ def test_scrape_headlines_skips_failed_sources_gracefully(monkeypatch):
         ["https://example.com/a", "https://example.com/b"], CFG
     )
     assert result.empty
+
+
+# --------------------------------------------------------------------- #
+# Import-time safety: the live runner must import on a machine with no
+# NLTK data (a clean CI checkout). Regression guard for the bug that
+# made every scheduled GitHub Actions run fail at import.
+# --------------------------------------------------------------------- #
+def test_penn_to_wordnet_literals_match_nltk_constants():
+    # Read the constants off the reader CLASS, not the lazy
+    # `nltk.corpus.wordnet` loader: the class attributes need no
+    # downloaded corpus, so this assertion itself stays import-safe.
+    # If NLTK ever changes these values, this fails loudly instead of
+    # silently mislemmatising.
+    from nltk.corpus.reader.wordnet import WordNetCorpusReader as R
+
+    assert sentiment._PENN_TO_WORDNET == {
+        "J": R.ADJ, "V": R.VERB, "R": R.ADV,
+    }
+    assert sentiment._WORDNET_NOUN == R.NOUN
+
+
+def test_module_has_no_module_level_lazy_corpus_access():
+    # The actual failure mode: `wordnet.ADJ` evaluated at module level
+    # triggers a LazyCorpusLoader load and raises LookupError without
+    # downloaded data, killing `import atlas.strategy` -> the whole
+    # live runner. Nothing at module scope may reference the loader.
+    import inspect
+
+    source = inspect.getsource(sentiment)
+    module_level = [
+        line
+        for line in source.splitlines()
+        if line and not line[0].isspace() and not line.lstrip().startswith("#")
+    ]
+    offenders = [line for line in module_level if "wordnet." in line]
+    assert not offenders, (
+        "module-level nltk.corpus.wordnet attribute access reintroduced; "
+        f"this breaks import on a clean checkout: {offenders}"
+    )
