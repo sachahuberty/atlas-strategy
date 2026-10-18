@@ -1,0 +1,2 @@
+as_of,status,run_utc,one_way_wanted,one_way_executed,cap_binding,book_return,permanent_return,messages
+2026-10-09,ok,2026-10-18T17:35:16.289499+00:00,0.5,0.5,False,,,Uninitialized state: funding the book from cash.
