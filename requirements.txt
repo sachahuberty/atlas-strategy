@@ -31,5 +31,12 @@ pyyaml
 pytest
 jupyter
 
-# NOTE: after first successful install, pin exact versions with:
-#   pip freeze > requirements.lock.txt
+# This file is the human-readable top-level dependency list: add/remove
+# packages here. It is NOT what CI installs from -- CI installs from
+# requirements.lock.txt (exact pinned versions, including transitive
+# deps), so a dependency's release can't silently change a model fit or
+# a numerical result between weekly runs. After changing this file,
+# regenerate the lock in a clean .venv:
+#   pip install -r requirements.txt && pip install -e .
+#   pip freeze | grep -v "^-e " > requirements.lock.txt
+# then re-add the `; sys_platform == "win32"` marker on pywinpty.

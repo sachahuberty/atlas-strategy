@@ -177,6 +177,10 @@ def _header(run) -> str:
     as_of = (
         run.as_of.date().isoformat() if run.as_of is not None else "unknown"
     )
+    run_utc = getattr(run, "run_utc", None)
+    run_date = (
+        run_utc.strftime("%Y-%m-%d %H:%M UTC") if run_utc is not None else None
+    )
     status = run.status
     label, color = _STATUS_STYLE.get(status, (status.upper(), "#5b6470"))
     diag = run.diagnostics or {}
@@ -198,7 +202,8 @@ def _header(run) -> str:
           <h1>Weekly Signal Report</h1>
         </div>
         <div class="asof">
-          <div class="asof-date">{escape(as_of)}</div>
+          <div class="asof-date">Decision: {escape(as_of)}</div>
+          {f'<div class="run-date">Run: {escape(run_date)}</div>' if run_date else ''}
           <div class="badges">
             <span class="badge" style="--c:{color}">{escape(label)}</span>
             <span class="badge" style="--c:{pcolor}">{escape(plabel)}</span>
@@ -265,7 +270,7 @@ def _weights_table(target, current, buckets, cap) -> str:
         cls = " class='capped'" if capped else ""
         bucket = _BUCKET_LABEL.get(str(buckets.get(ticker)), "-")
         cur_cell = _pct(cur) if current is not None else "n/a"
-        delta_cell = _signed_pct(delta) if delta is not None else "n/a"
+        delta_cell = _signed_pct(delta, dp=1) if delta is not None else "n/a"
         flag = " <span class='cap-flag'>cap</span>" if capped else ""
         rows.append(
             f"<tr{cls}><td class='tk'>{escape(ticker)}{flag}</td>"
@@ -749,6 +754,8 @@ header{border-bottom:2px solid var(--ink);padding-bottom:16px;
 h1{font-size:26px;margin:2px 0 0;font-weight:600;letter-spacing:-.01em;}
 .asof{text-align:right;}
 .asof-date{font-variant-numeric:tabular-nums;font-weight:600;font-size:15px;}
+.run-date{font-variant-numeric:tabular-nums;font-size:12px;color:#5b6470;
+  margin-top:2px;}
 .badges{margin-top:6px;display:flex;gap:6px;justify-content:flex-end;
   flex-wrap:wrap;}
 .badge{display:inline-block;padding:3px 9px;border-radius:3px;font-size:11px;

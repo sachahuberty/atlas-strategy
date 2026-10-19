@@ -39,6 +39,24 @@ set FRED_API_KEY=your_key_here  # free key: https://fred.stlouisfed.org/docs/api
 pytest
 ```
 
+`requirements.txt` is the human-readable top-level dependency list: add or
+remove packages here. `requirements.lock.txt` pins the exact version of
+every one of those packages' transitive dependencies, resolved in a known-
+good `.venv`; CI (`.github/workflows/weekly.yml`) installs from the lock
+file, not from `requirements.txt`, so a dependency release can't silently
+change an HMM fit or a covariance number between weekly runs. After adding
+or bumping a dependency in `requirements.txt`, regenerate the lock in a
+clean `.venv`:
+
+```bash
+pip install -r requirements.txt && pip install -e .
+pip freeze | grep -v "^-e " > requirements.lock.txt
+```
+
+then re-add the `; sys_platform == "win32"` marker on `pywinpty` (a
+Jupyter-terminal dependency with no Linux wheel; the CI runner is
+`ubuntu-24.04`).
+
 ## Live automation (weekly runner + report)
 
 The validated backtest is also runnable forward, one week at a time. The

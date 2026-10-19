@@ -118,6 +118,7 @@ class RunResult:
 
     as_of: pd.Timestamp | None
     status: str
+    run_utc: pd.Timestamp | None = None
     target_weights: pd.Series | None = None
     current_weights: pd.Series | None = None
     executed_weights: pd.Series | None = None
@@ -153,18 +154,59 @@ def resolve_as_of(
 
     Uses `backtest.week_end_dates` (the same calendar the backtester
     rebalances on, holidays included) rather than hand-rolling a Friday
-    date. The current, still-in-progress ISO week is excluded: a job
-    running on Wednesday must decide for last week's close, not for a
-    half-finished week.
+    date.
+
+    Only a reference that falls ON the in-progress ISO week (Mon-Fri,
+    `reference.weekday() < 5`) excludes that week: a job running on
+    Wednesday must decide for last week's close, not a half-finished
+    week. A Sat/Sun reference's own ISO week has already fully elapsed
+    (Friday has closed), so it is NOT excluded -- the prior behaviour
+    excluded it unconditionally, which made every weekend run decide a
+    full week late (ANALYSIS_V4 Sec 2.2).
+
+    For that Sat/Sun case, if the current week's data stops before
+    Friday (`weekday() != 4`) -- the provider hasn't posted Friday's
+    close yet, rather than Friday being a genuine market holiday, which
+    would already be reflected in `calendar` for any fully-elapsed past
+    week -- raise `StaleDataError` instead of silently deciding on the
+    partial week. (This is deliberately conservative: a real market
+    holiday that lands on the Friday of the CURRENT week and is queried
+    on that same Saturday will also hold, re-resolving correctly once
+    `reference` moves to Monday; holding is always a safe outcome here,
+    never a wrong decision.)
     """
     reference = (reference or pd.Timestamp.today()).normalize()
     ref_year, ref_week, _ = reference.isocalendar()
-    candidates = [
-        d
-        for d in backtest.week_end_dates(calendar)
-        if (d.isocalendar().year, d.isocalendar().week) != (ref_year, ref_week)
-        and d <= reference
-    ]
+    exclude_current_week = reference.weekday() < 5
+
+    week_ends = backtest.week_end_dates(calendar)
+    candidates = [d for d in week_ends if d <= reference]
+
+    if exclude_current_week:
+        candidates = [
+            d
+            for d in candidates
+            if (d.isocalendar().year, d.isocalendar().week)
+            != (ref_year, ref_week)
+        ]
+    else:
+        current_week_end = next(
+            (
+                d
+                for d in candidates
+                if (d.isocalendar().year, d.isocalendar().week)
+                == (ref_year, ref_week)
+            ),
+            None,
+        )
+        if current_week_end is not None and current_week_end.weekday() != 4:
+            raise StaleDataError(
+                "Data for the current week only reaches "
+                f"{current_week_end.date()} "
+                f"({current_week_end.day_name()}); Friday's close has not "
+                "posted yet. Holding this week."
+            )
+
     if not candidates:
         raise HeldError(
             "No completed week-end trading day is available in the data yet."
@@ -263,9 +305,13 @@ def build_strategy(
     return bl_fn
 
 
-def _empty_result(status: str, as_of, messages: list[str]) -> RunResult:
+def _empty_result(
+    status: str, as_of, messages: list[str], run_utc: pd.Timestamp
+) -> RunResult:
     as_of_ts = pd.Timestamp(as_of) if as_of is not None else None
-    return RunResult(as_of=as_of_ts, status=status, messages=messages)
+    return RunResult(
+        as_of=as_of_ts, status=status, run_utc=run_utc, messages=messages
+    )
 
 
 def run_once(
@@ -295,6 +341,10 @@ def run_once(
     cfg = cfg if cfg is not None else data.load_config()
     posture_cfg = _load_posture_cfg(cfg)
     resolved_as_of = pd.Timestamp(as_of) if as_of is not None else None
+    # Captured once, at the start, so the report's "run date" reflects
+    # when the job actually executed, for every outcome (ok/held/failed),
+    # not just runs that reach a successful state-mutating decision.
+    run_utc = pd.Timestamp.now(tz="UTC")
 
     try:
         # Load state first: a corrupt state file must fail loudly (via
@@ -318,17 +368,18 @@ def run_once(
                 STATUS_ALREADY_RUN,
                 resolved_as_of,
                 [f"Already decided for {resolved_as_of.date()}; no re-trade."],
+                run_utc,
             )
 
         return _decide(
             current_state, market, cfg, posture_cfg, resolved_as_of,
-            dry_run, state_path,
+            dry_run, state_path, run_utc,
         )
     except HeldError as exc:
-        return _empty_result(STATUS_HELD, resolved_as_of, [str(exc)])
+        return _empty_result(STATUS_HELD, resolved_as_of, [str(exc)], run_utc)
     except Exception:  # noqa: BLE001 -- terminal guard: never mutate on error
         return _empty_result(
-            STATUS_FAILED, resolved_as_of, [traceback.format_exc()]
+            STATUS_FAILED, resolved_as_of, [traceback.format_exc()], run_utc
         )
 
 
@@ -340,6 +391,7 @@ def _decide(
     as_of: pd.Timestamp,
     dry_run: bool,
     state_path,
+    run_utc: pd.Timestamp,
 ) -> RunResult:
     """Reconcile -> decide -> size -> persist. Returns a STATUS_OK
     result. Raises only on genuinely unexpected errors (handled by the
@@ -459,7 +511,7 @@ def _decide(
         new_state = dict(current_state)
         new_state["initialized"] = True
         new_state["weights"] = {
-            t: float(v) for t, v in executed_weights.items()
+            t: float(v) for t, v in _round_weights(executed_weights).items()
         }
         # Anchor at the DECISION date (Friday), holding POST-execution
         # weights -- see the module docstring for why this is the anchor
@@ -468,13 +520,14 @@ def _decide(
         new_state["last_decision_date"] = as_of.isoformat()
         new_state["last_execution_date"] = execution_date.isoformat()
         new_state["run_count"] = int(current_state.get("run_count", 0)) + 1
-        new_state["last_run_utc"] = datetime.now(timezone.utc).isoformat()
+        new_state["last_run_utc"] = run_utc.isoformat()
         new_state["last_status"] = STATUS_OK
         state_mod.save_state(new_state, state_path)
 
     return RunResult(
         as_of=as_of,
         status=STATUS_OK,
+        run_utc=run_utc,
         target_weights=target,
         current_weights=current,
         executed_weights=executed_weights,
@@ -507,6 +560,23 @@ def _config_hash(cfg: dict) -> str:
     report footer's provenance line."""
     blob = json.dumps(cfg, sort_keys=True, default=str)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def _round_weights(weights: pd.Series, dp: int = 6) -> pd.Series:
+    """Round a weight vector to `dp` decimals for display/persistence,
+    then renormalize so the sum is unaffected.
+
+    SLSQP residuals like `4.5e-17` round to exactly 0, which is the
+    point; but rounding every element independently can drift the sum
+    by up to `len(weights) * 0.5 * 10**-dp`, which would fail
+    `state.validate_state`'s sum-to-1 tolerance for a ~20-asset book.
+    Renormalizing after rounding keeps the sum exact without reversing
+    the cosmetic fix (the SLSQP noise this targets is many orders of
+    magnitude below the renormalization's own effect on each weight).
+    """
+    rounded = weights.round(dp)
+    total = rounded.sum()
+    return rounded / total if total > 1e-12 else rounded
 
 
 def _next_trading_day(as_of: pd.Timestamp) -> pd.Timestamp:
@@ -545,15 +615,17 @@ def write_run_outputs(
     weekly_dir = base / "weekly" / as_of_label
     weekly_dir.mkdir(parents=True, exist_ok=True)
 
-    alloc = result.executed_weights.rename("weight")
+    alloc = _round_weights(result.executed_weights).rename("weight")
     alloc.index.name = "ticker"
     alloc.to_csv(weekly_dir / "allocation.csv")
 
+    # current/target are weight vectors (round + renormalize); trade is
+    # a delta with no sum-to-1 constraint, so it is only rounded.
     trades = pd.DataFrame(
         {
-            "current": result.current_weights,
-            "target": result.target_weights,
-            "trade": result.trade,
+            "current": _round_weights(result.current_weights),
+            "target": _round_weights(result.target_weights),
+            "trade": result.trade.round(6),
         }
     )
     trades.index.name = "ticker"
@@ -570,7 +642,11 @@ def _append_history(result: RunResult, base: Path, as_of_label: str) -> None:
     row = {
         "as_of": as_of_label,
         "status": result.status,
-        "run_utc": datetime.now(timezone.utc).isoformat(),
+        "run_utc": (
+            result.run_utc.isoformat()
+            if result.run_utc is not None
+            else datetime.now(timezone.utc).isoformat()
+        ),
         "one_way_wanted": result.one_way_turnover_wanted,
         "one_way_executed": result.one_way_executed,
         "cap_binding": result.cap_binding,

@@ -206,6 +206,60 @@ def test_resolve_as_of_excludes_in_progress_week():
     assert resolved.isocalendar().week != reference.isocalendar().week
 
 
+@pytest.mark.parametrize(
+    "reference",
+    [pd.Timestamp("2026-06-13"), pd.Timestamp("2026-06-14")],  # Sat, Sun
+)
+def test_resolve_as_of_weekend_reference_decides_for_friday_just_closed(
+    reference,
+):
+    # Friday 2026-06-12 is the last trading day of the week that just
+    # closed; a weekend run must decide for it, not for the week before
+    # (ANALYSIS_V4 Sec 2.2 -- the pre-fix code excluded it unconditionally
+    # and was a full week stale on every weekend run).
+    calendar = pd.bdate_range("2026-05-01", "2026-06-12")
+    resolved = live.resolve_as_of(calendar, reference=reference)
+    assert resolved == pd.Timestamp("2026-06-12")
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [pd.Timestamp(d) for d in
+     ["2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-19"]],
+)
+def test_resolve_as_of_weekday_reference_decides_for_previous_completed_week(
+    reference,
+):
+    # Mon-Fri of the following week: the in-progress week is excluded,
+    # so every weekday resolves to the same prior Friday.
+    calendar = pd.bdate_range("2026-05-01", "2026-06-19")
+    resolved = live.resolve_as_of(calendar, reference=reference)
+    assert resolved == pd.Timestamp("2026-06-12")
+
+
+def test_resolve_as_of_holiday_week_resolves_to_thursday():
+    # Good Friday 2026-04-03 is a market holiday: it is simply absent
+    # from the calendar (as it would be from real downloaded prices).
+    # Queried the following week (a fully-elapsed past week, immune to
+    # the weekend staleness guard), the week-end must be Thursday.
+    calendar = pd.bdate_range("2026-03-01", "2026-04-10").drop(
+        pd.Timestamp("2026-04-03")
+    )
+    reference = pd.Timestamp("2026-04-06")  # Monday after
+    resolved = live.resolve_as_of(calendar, reference=reference)
+    assert resolved == pd.Timestamp("2026-04-02")  # Thursday
+
+
+def test_resolve_as_of_saturday_with_friday_missing_holds():
+    # Friday 2026-06-12 has not posted: the current week's data stops
+    # on Thursday. A Saturday run must HOLD rather than silently decide
+    # using Thursday's close as if it were the week's final data.
+    calendar = pd.bdate_range("2026-05-01", "2026-06-11")  # thru Thursday
+    reference = pd.Timestamp("2026-06-13")  # Saturday
+    with pytest.raises(live.StaleDataError):
+        live.resolve_as_of(calendar, reference=reference)
+
+
 # --------------------------------------------------------------------- #
 # THE replay parity tests (real strategy, offline)
 # --------------------------------------------------------------------- #
@@ -546,3 +600,46 @@ def test_dry_run_never_writes_state(tmp_path, monkeypatch):
     assert res.status == live.STATUS_OK
     assert not sp.exists()  # dry run leaves no state behind
     assert not list(tmp_path.glob("*.tmp"))
+
+
+# --------------------------------------------------------------------- #
+# Rounding (ANALYSIS_V4 Sec 2.7): SLSQP residuals like 4.5e-17 must not
+# reach allocation.csv / trades.csv / state.json.
+# --------------------------------------------------------------------- #
+def test_round_weights_rounds_and_renormalizes():
+    noisy = pd.Series({"A": 0.25 + 4.5e-17, "B": 0.25, "C": 0.5 - 1e-16})
+    rounded = live._round_weights(noisy)
+    assert rounded["A"] == 0.25
+    assert rounded.sum() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_round_weights_handles_all_zero():
+    zeros = pd.Series({"A": 0.0, "B": 0.0})
+    rounded = live._round_weights(zeros)
+    assert (rounded == 0.0).all()
+
+
+def test_funding_path_writes_rounded_outputs(tmp_path, monkeypatch):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    # EQ/CA carry a near-cancelling SLSQP-style residual; FI/CO are clean.
+    noisy_target = pd.Series(
+        {"EQ": 0.4 + 4.5e-17, "FI": 0.2, "CO": 0.2, "CA": 0.2 - 4.5e-17}
+    )
+    _mock_fixed_decision(monkeypatch, market, noisy_target)
+
+    sp = tmp_path / "state.json"
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+
+    saved = state_mod.load_state(sp)  # validate_state must still pass
+    for w in saved["weights"].values():
+        assert abs(w - round(w, 6)) < 1e-9
+
+    weekly_dir = live.write_run_outputs(res, base_dir=tmp_path / "out")
+    alloc = pd.read_csv(weekly_dir / "allocation.csv", index_col="ticker")
+    trades = pd.read_csv(weekly_dir / "trades.csv", index_col="ticker")
+    for df, cols in ((alloc, ["weight"]), (trades, ["current", "target"])):
+        for col in cols:
+            for w in df[col]:
+                assert abs(w - round(w, 6)) < 1e-9

@@ -228,6 +228,40 @@ def test_renders_failed_run(tmp_path):
     assert "http://" not in html
 
 
+# --------------------------------------------------------------------- #
+# Header shows both the decision date and the run date (ANALYSIS_V4
+# Sec 2.7): a decision-lag bug like Sec 2.2's is invisible otherwise.
+# --------------------------------------------------------------------- #
+def test_header_shows_decision_and_run_date(tmp_path):
+    run = _ok_run(run_utc=pd.Timestamp("2026-06-07 02:15", tz="UTC"))
+    html = _render(run, tmp_path=tmp_path)
+    assert "2026-06-05" in html  # decision date
+    assert "2026-06-07 02:15 UTC" in html  # run date
+
+
+def test_header_omits_run_date_when_absent(tmp_path):
+    # Older/degraded RunResult-like objects without run_utc must not
+    # break rendering.
+    html = _render(_ok_run(), tmp_path=tmp_path)
+    assert "Decision: 2026-06-05" in html
+    assert '<div class="run-date">' not in html
+
+
+def test_delta_column_matches_target_current_precision(tmp_path):
+    html = _render(_ok_run(), tmp_path=tmp_path)
+    # IWM: target 0.2, current 0.206 -> in the Book table's own row,
+    # Target/Current render at 1dp (20.0%/20.6%) and Delta must match
+    # (-0.6%), not the 2dp -0.60% it used before this fix. Scope the
+    # check to the Book table: "The Trade" section renders deltas at
+    # its own (unrelated, untouched) precision.
+    book_start = html.index("The Book")
+    book_end = html.index("The Trade")
+    book_html = html[book_start:book_end]
+    assert "20.0%" in book_html and "20.6%" in book_html
+    assert "-0.6%" in book_html
+    assert "-0.60%" not in book_html
+
+
 def test_missing_diagnostics_keys_do_not_raise(tmp_path):
     # A run with weights but almost-empty diagnostics (e.g. a partial
     # capture) must render "not available", never raise.
