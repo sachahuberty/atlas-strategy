@@ -145,6 +145,33 @@ def state_profiles(
     )
 
 
+def _rescaled_rank(series: pd.Series) -> pd.Series:
+    """Empirical rank rescaled onto the SAME 0..2 scale `target_scores`
+    uses (low=0/medium=1/high=2), rather than a raw 0..(n-1) scale.
+
+    ANALYSIS_V4 Sec 2.3a (posture-mapping bug): with `n` visited states
+    on a 0..(n-1) scale, the empirical score can reach at most +-(n-1),
+    which is only +-2 when all 3 (non-degenerate) states are visited.
+    With 2 visited states the empirical score maxes out at +-1, so the
+    risk_off target (+2) ties exactly with neutral's (0) -- a tie
+    `map_states_to_postures` broke by dict insertion order, making
+    risk_off UNREACHABLE whenever only 2 states are visited (31% of
+    OOS fits), however extreme the volatile state actually was.
+    Rescaling by `2/(n-1)` makes 2 visited states land exactly on the
+    scale's own endpoints (0 and 2), matching "the single worst/best
+    state IS the low/high end," not an artificially compressed
+    midpoint. With 3 states, `2/(n-1) == 1`, so this is unchanged from
+    before. A single visited state carries no rank information at all
+    -- mapped to the midpoint (1), landing exactly on neutral's target
+    score (0) by construction, not by tie-breaking luck.
+    """
+    n = len(series)
+    rank0 = series.rank(method="first") - 1
+    if n <= 1:
+        return pd.Series(1.0, index=series.index)
+    return rank0 * 2.0 / (n - 1)
+
+
 def map_states_to_postures(
     profiles: pd.DataFrame, posture_cfg: dict
 ) -> dict:
@@ -163,9 +190,9 @@ def map_states_to_postures(
         for name, spec in postures.items()
     }
 
-    vol_rank = profiles["vol"].rank(method="first") - 1
-    return_rank = profiles["mean_return"].rank(method="first") - 1
-    empirical_score = vol_rank - return_rank
+    vol_score = _rescaled_rank(profiles["vol"])
+    return_score = _rescaled_rank(profiles["mean_return"])
+    empirical_score = vol_score - return_score
 
     return {
         state: min(

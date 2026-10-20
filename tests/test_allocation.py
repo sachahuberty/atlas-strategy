@@ -38,6 +38,61 @@ def _assert_valid_weights(w: pd.Series, cap: float = 0.6):
     assert (w <= cap + 1e-6).all()
 
 
+# --- ANALYSIS_V4 Sec 2.4/6 Tier 1 action 7: covariance method --------
+@pytest.fixture
+def mixed_vol_returns():
+    # One near-zero-vol "cash-like" asset (BIL) alongside several much
+    # higher-vol ones (a ~190x vol ratio, like the real universe's BIL
+    # vs. SLV/USO), independent draws so the only structure is the vol
+    # spread itself.
+    rng = np.random.default_rng(7)
+    n = 756
+    ann_vols = {
+        "BIL": 0.0023, "AGG": 0.04, "ACWI": 0.15, "SLV": 0.42, "USO": 0.36,
+    }
+    data = {
+        t: rng.normal(0.0002, v / np.sqrt(252), n) for t, v in ann_vols.items()
+    }
+    return pd.DataFrame(data)
+
+
+def test_ledoit_wolf_inflates_low_vol_asset(mixed_vol_returns):
+    # Documents the bug being fixed: plain Ledoit-Wolf's shrinkage
+    # target (average variance x identity) pulls BIL's tiny variance
+    # toward the universe's much larger average, inflating it well
+    # beyond any reasonable estimation-noise margin.
+    cov = covariance_matrix(mixed_vol_returns, method="ledoit_wolf")
+    bil_vol = np.sqrt(cov.loc["BIL", "BIL"])
+    sample_vol = mixed_vol_returns["BIL"].std(ddof=1) * np.sqrt(252)
+    assert bil_vol > sample_vol * 2  # measured ~12.8x on the real universe
+
+
+def test_ledoit_wolf_corr_preserves_low_vol_asset(mixed_vol_returns):
+    cov = covariance_matrix(mixed_vol_returns, method="ledoit_wolf_corr")
+    bil_vol = np.sqrt(cov.loc["BIL", "BIL"])
+    sample_vol = mixed_vol_returns["BIL"].std(ddof=1) * np.sqrt(252)
+    assert abs(bil_vol - sample_vol) / sample_vol < 0.10
+
+
+def test_ledoit_wolf_corr_matches_ledoit_wolf_shrinkage_direction(
+    mixed_vol_returns,
+):
+    # The high-vol assets' own variances should be largely unaffected
+    # either way (they're already close to the shrinkage target there);
+    # only the low-vol asset's treatment should differ materially.
+    cov_corr = covariance_matrix(mixed_vol_returns, method="ledoit_wolf_corr")
+    cov_sample = covariance_matrix(mixed_vol_returns, method="sample")
+    for ticker in ("ACWI", "SLV", "USO"):
+        vol_corr = np.sqrt(cov_corr.loc[ticker, ticker])
+        vol_sample = np.sqrt(cov_sample.loc[ticker, ticker])
+        assert abs(vol_corr - vol_sample) / vol_sample < 0.10
+
+
+def test_covariance_matrix_unknown_method_raises(synthetic_returns):
+    with pytest.raises(ValueError, match="not_a_real_method"):
+        covariance_matrix(synthetic_returns, method="not_a_real_method")
+
+
 def test_max_sharpe_respects_constraints(synthetic_returns):
     mu = mean_returns(synthetic_returns)
     cov = covariance_matrix(synthetic_returns)

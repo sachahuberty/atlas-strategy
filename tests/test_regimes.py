@@ -41,18 +41,44 @@ def test_map_states_to_postures_uses_profile_not_index():
 
 
 def test_map_states_to_postures_degrades_with_fewer_states():
-    # Only 2 of 3 configured postures' states actually appeared (e.g. a
-    # quiet window where one regime never won the Viterbi path) -- must
-    # not raise, and must still preserve relative risk ordering.
+    # ANALYSIS_V4 Sec 2.3a: only 2 of 3 configured postures' states
+    # actually appeared (e.g. a quiet window where one regime never
+    # won the Viterbi path) -- must not raise, must still preserve
+    # relative risk ordering, AND the high-vol/low-return state must
+    # actually reach risk_off, not just rank "more risk-off than the
+    # other one." Pre-fix, a 0..(n-1) empirical scale maxed out at
+    # +-1 with 2 states, tying risk_off's target (+2) with neutral's
+    # (0); dict order silently picked neutral every time.
     profiles = pd.DataFrame(
         {"mean_return": {0: 0.15, 1: -0.20}, "vol": {0: 0.08, 1: 0.30}}
     )
     mapping = regimes.map_states_to_postures(profiles, POSTURE_CFG)
     assert set(mapping.keys()) == {0, 1}
-    target_scores = {
-        "risk_on": -2, "neutral": 0, "risk_off": 2,
-    }
-    assert target_scores[mapping[0]] < target_scores[mapping[1]]
+    assert mapping[0] == "risk_on"
+    assert mapping[1] == "risk_off"
+
+
+def test_map_states_to_postures_three_states_unchanged():
+    # 2/(n-1) == 1 at n=3, so this must reproduce the pre-fix result
+    # exactly: the rescaling is a no-op when every configured posture's
+    # state is actually visited.
+    profiles = pd.DataFrame(
+        {
+            "mean_return": {0: -0.20, 1: 0.15, 2: 0.02},
+            "vol": {0: 0.30, 1: 0.08, 2: 0.15},
+        }
+    )
+    mapping = regimes.map_states_to_postures(profiles, POSTURE_CFG)
+    assert mapping == {0: "risk_off", 1: "risk_on", 2: "neutral"}
+
+
+def test_map_states_to_postures_single_state_is_neutral():
+    # A single visited state carries no rank information -- must land
+    # on neutral exactly (the midpoint target score, 0), not on
+    # whichever posture happens to be first in insertion order.
+    profiles = pd.DataFrame({"mean_return": {0: 0.30}, "vol": {0: 0.30}})
+    mapping = regimes.map_states_to_postures(profiles, POSTURE_CFG)
+    assert mapping == {0: "neutral"}
 
 
 def test_state_profiles_known_values():

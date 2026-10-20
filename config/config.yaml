@@ -165,13 +165,29 @@ anomaly:
   hidden_units: 8                  # LSTM encoder/decoder width
   threshold_percentile: 99
   validation_fraction: 0.2         # chronological split, tail = validation
-  epochs: 50
-  patience: 5                      # early-stopping patience on val_loss
+  epochs: 10                       # ANALYSIS_V4 Sec 2.5/6 Tier 1 action 8:
+                                    # this is now the ONLY copy of these three
+                                    # values -- notebooks 09/11 and the live
+                                    # runner (strategy.with_anomaly_override,
+                                    # via live.build_strategy) all read them
+                                    # from here, no notebook-side overrides.
+                                    # Previously this file held 50/5/63 while
+                                    # the validated canonical OOS run (and the
+                                    # ablation study) overrode to 10/3/126 in
+                                    # notebook-local cfg copies, so the
+                                    # deployed autoencoder was trained ~5x
+                                    # longer than the one actually validated.
+                                    # Chose the validated values: they are
+                                    # the ones every OOS/ablation number in
+                                    # this repo was measured against, and
+                                    # the override fires on only ~2% of
+                                    # weeks either way (measured impact
+                                    # +0.002), so there was no performance
+                                    # reason to prefer the other set.
+  patience: 3                      # early-stopping patience on val_loss
   batch_size: 32
   refit: fold                      # per walk-forward fold (formalized stage 9)
-  refit_frequency_days: 63         # ~1 quarter; stage-4 stand-in for the
-                                    # real fold schedule, to keep the OOS
-                                    # backtest demo tractable before stage 9
+  refit_frequency_days: 126        # ~1 semester (was 63, ~1 quarter)
   blend_to_gmv: 1.0                # 1.0 = fully defensive when flagged
 
 meanreversion:
@@ -248,6 +264,25 @@ momentum:
   max_view_magnitude: 0.03          # bounded per-asset view cap (S4/S11)
 
 black_litterman:
+  excess_return_prior: true         # ANALYSIS_V4 Sec 2.1/6 Tier 1 action 5:
+                                     # Pi = delta*Sigma*w_mkt is an EXCESS
+                                     # return (He-Litterman reverse
+                                     # optimization). true (default, the fix):
+                                     # no cash-prior override, BL runs in
+                                     # excess-return space, max_sharpe/
+                                     # utility_select called with rf=0 (would
+                                     # double-subtract otherwise). false (the
+                                     # deployed-through-2026-10 behavior, kept
+                                     # ONLY for the Phase-2 side-by-side
+                                     # ablation): cash's prior is overridden
+                                     # to rf and max_sharpe/utility_select are
+                                     # called with rf=rf, silently subtracting
+                                     # the risk-free rate a second time from
+                                     # an already-excess return -- this pushed
+                                     # 19 of 22 assets below cash and produced
+                                     # an unintended high-volatility tilt (see
+                                     # ANALYSIS_V4.md Sec 2.1 for the measured
+                                     # reproduction).
   tau: 0.05
   delta: 2.5                        # risk-aversion / equilibrium calibration
                                      # (classic BL default). Used as-is when
@@ -308,7 +343,20 @@ black_litterman:
 
 optimization:
   objective: max_sharpe            # on BL posterior returns
-  covariance: ledoit_wolf          # shrunk covariance
+  covariance: ledoit_wolf          # shrunk covariance. Other option:
+                                    # "ledoit_wolf_corr" (ANALYSIS_V4 Sec
+                                    # 2.4/6 Tier 1 action 7): shrinks the
+                                    # correlation matrix instead of raw
+                                    # covariance, so a near-zero-vol asset
+                                    # (e.g. BIL) keeps its own sample
+                                    # variance instead of being inflated
+                                    # toward the universe's average variance
+                                    # (measured ~12.8x inflation under plain
+                                    # ledoit_wolf). Not yet the default --
+                                    # Phase 2 measures its OOS impact first
+                                    # (measured near-zero on returns, a
+                                    # correctness fix not a performance
+                                    # lever; see ANALYSIS_V4.md Sec 2.4/4).
   risk_aversion_levels: [2, 5, 10] # utility comparison (S1/S3)
   lookback_days: 756               # trailing window for mu/cov, ~3Y (S6 convention)
 

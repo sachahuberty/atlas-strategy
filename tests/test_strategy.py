@@ -365,6 +365,42 @@ def test_black_litterman_strategy_falls_back_when_hmm_fit_degenerates(
     assert (weights >= -1e-9).all()
 
 
+def test_black_litterman_strategy_hmm_degeneracy_surfaced_in_diagnostics(
+    monkeypatch,
+):
+    # ANALYSIS_V4 Sec 2.3a: a degenerate HMM fit must not fail silently
+    # -- the diagnostics sink carries an explicit reason, not just an
+    # inferable absence of "current_state".
+    def _boom(*args, **kwargs):
+        raise ValueError("startprob_ must sum to 1 (got nan)")
+
+    monkeypatch.setattr(regimes, "market_regime", _boom)
+
+    diag = {}
+    returns = _iid_returns()
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, record=diag.update
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert diag["regime"]["posture"] == "neutral"
+    assert "current_state" not in diag["regime"]
+    assert "hmm_fit_degenerate" in diag["regime"]["fallback_reason"]
+    assert "startprob_" in diag["regime"]["fallback_reason"]
+
+
+def test_black_litterman_strategy_thin_history_fallback_reason():
+    diag = {}
+    returns = _iid_returns(n=10, seed=9)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, record=diag.update
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert diag["regime"]["posture"] == "neutral"
+    assert diag["regime"]["fallback_reason"] == "insufficient_history"
+
+
 def test_black_litterman_strategy_uses_permanent_as_market_weights(
     monkeypatch,
 ):
@@ -484,7 +520,12 @@ def test_black_litterman_strategy_offers_three_candidates_to_utility_select(
     assert captured["keys"] == {"black_litterman", "gmv", "risk_parity"}
 
 
-def test_black_litterman_strategy_overrides_cash_prior_with_rf(monkeypatch):
+def test_black_litterman_strategy_excess_prior_leaves_cash_unoverridden(
+    monkeypatch,
+):
+    # Default convention (ANALYSIS_V4 Sec 2.1 fix): Pi is already an
+    # excess return, so cash's near-zero equilibrium Pi is correct AS
+    # IS and must NOT be overridden by rf -- regardless of rf's value.
     captured = {}
     original = allocation.black_litterman
 
@@ -496,17 +537,26 @@ def test_black_litterman_strategy_overrides_cash_prior_with_rf(monkeypatch):
 
     returns = _iid_returns()
     rf_series = pd.Series(0.04, index=returns.index)
+    assert "excess_return_prior" not in BL_CFG["black_litterman"]  # default
     strategy_fn = strategy.black_litterman_strategy(
         CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
     )
     strategy_fn(returns.index[-1], returns)
 
-    assert captured["prior"]["BIL"] == pytest.approx(0.04)
+    # Not overridden to rf=0.04; left at the natural (near-zero, but not
+    # exactly 0 or rf) reverse-optimization value for a near-zero-vol
+    # asset against this fixture's actual (noisy) covariance.
+    assert captured["prior"]["BIL"] != pytest.approx(0.04)
+    assert captured["prior"]["BIL"] != 0.0
+    assert abs(captured["prior"]["BIL"]) < 0.03
 
 
-def test_black_litterman_strategy_defaults_rf_to_zero_without_rf_series(
+def test_black_litterman_strategy_legacy_overrides_cash_prior_with_rf(
     monkeypatch,
 ):
+    # excess_return_prior: false reproduces the deployed-through-2026-10
+    # behavior for the Phase-2 side-by-side ablation (ANALYSIS_V4 Sec
+    # 2.1/6 Tier 1 action 5).
     captured = {}
     original = allocation.black_litterman
 
@@ -516,13 +566,150 @@ def test_black_litterman_strategy_defaults_rf_to_zero_without_rf_series(
 
     monkeypatch.setattr(allocation, "black_litterman", spy)
 
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["excess_return_prior"] = False
     returns = _iid_returns()
+    rf_series = pd.Series(0.04, index=returns.index)
     strategy_fn = strategy.black_litterman_strategy(
-        CLASS_BUCKET, BL_CFG, POSTURE_CFG
+        CLASS_BUCKET, cfg, POSTURE_CFG, rf_series=rf_series
     )
     strategy_fn(returns.index[-1], returns)
 
-    assert captured["prior"]["BIL"] == 0.0
+    assert captured["prior"]["BIL"] == pytest.approx(0.04)
+
+
+def test_black_litterman_strategy_rf_defaults_to_zero_without_rf_series():
+    # rf itself (not the cash-prior convention) defaults to 0 absent an
+    # rf_series -- observed via the diagnostics sink, which is agnostic
+    # to excess_return_prior.
+    diag = {}
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, record=diag.update
+    )
+    returns = _iid_returns()
+    strategy_fn(returns.index[-1], returns)
+
+    assert diag["rf"] == 0.0
+
+
+# --- ANALYSIS_V4 Sec 2.1/6 Tier 1 action 5: the regression test -------
+# With no views at all, the corrected forward step must return the
+# anchor up to the effect of the 20% per-asset cap (cash 25% -> 20%,
+# the excess redistributed to the other buckets), and every risky
+# asset's PURE prior (no views, no cap) must have positive expected
+# excess return. `gate: off` isolates the max_sharpe forward step
+# itself from the utility gate's separate choice among candidate
+# books (a low-vol bucket can win the gate as GMV/risk_parity
+# regardless of this fix, which is not what this test is about).
+# Asset classes carry different volatilities (like the real universe:
+# bonds low, equities/commodities high) -- with the three non-cash
+# buckets at identical vol, as in an earlier draft of this fixture,
+# the legacy double-subtraction shifts every risky asset's net return
+# down by the SAME constant and happens to reproduce the anchor
+# anyway; the bug's real signature only shows up when it can push a
+# LOW-vol (low-Pi) bucket below cash while a HIGH-vol (high-Pi)
+# bucket stays above it.
+
+_MULTI_ASSET_CLASS_BUCKET = pd.Series(
+    {
+        "EQ1": "equity", "EQ2": "equity", "EQ3": "equity",
+        "FI1": "fixed_income", "FI2": "fixed_income", "FI3": "fixed_income",
+        "CO1": "commodity", "CO2": "commodity", "CO3": "commodity",
+        "CASH": "cash",
+    }
+)
+_MULTI_ASSET_ANN_VOL = {
+    "equity": 0.20, "fixed_income": 0.03, "commodity": 0.25, "cash": 0.003,
+}
+
+
+def _no_view_cfg():
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["constraints"] = {"per_asset_cap": 0.20, "per_class_cap": 0.60}
+    cfg["modules"] = {
+        "regime_view": False,
+        "meanreversion_view": False,
+        "technical_view": False,
+        "sentiment_view": False,
+        "momentum_view": False,
+    }
+    cfg["black_litterman"]["gate"] = "off"
+    return cfg
+
+
+def _multi_vol_returns(tickers, n=1400, seed=3) -> pd.DataFrame:
+    """Independent (zero cross-covariance) returns per ticker, each at
+    its own asset class's annualized vol -- isolates Pi's dependence on
+    each asset's OWN variance (Pi_i ~ delta * var_i * w_mkt_i when
+    cross-covariance is ~0), rather than letting correlation structure
+    muddy the no-views reproduction."""
+    dates = pd.bdate_range("2015-01-01", periods=n)
+    rng = np.random.default_rng(seed)
+    data = {}
+    for t in tickers:
+        daily_vol = _MULTI_ASSET_ANN_VOL[_MULTI_ASSET_CLASS_BUCKET[t]]
+        daily_vol /= np.sqrt(252)
+        data[t] = rng.normal(0.0004, daily_vol, n)
+    return pd.DataFrame(data, index=dates)
+
+
+def test_black_litterman_strategy_no_views_returns_capped_anchor():
+    cfg = _no_view_cfg()
+    returns = _multi_vol_returns(_MULTI_ASSET_CLASS_BUCKET.index)
+    rf_series = pd.Series(0.04, index=returns.index)
+
+    diag = {}
+    strategy_fn = strategy.black_litterman_strategy(
+        _MULTI_ASSET_CLASS_BUCKET, cfg, POSTURE_CFG, market_ticker="EQ1",
+        rf_series=rf_series, record=diag.update,
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+
+    assert not diag["views_fired"]  # genuinely no views
+    assert weights.sum() == pytest.approx(1.0)
+
+    by_bucket = weights.groupby(_MULTI_ASSET_CLASS_BUCKET).sum()
+    # Cash capped at 20% (anchor was 25%); the excess 5% redistributed
+    # across the other three buckets, not collapsed into one or two of
+    # them -- the deployed bug's signature (see the legacy test below)
+    # is 20/0/60/20 (commodity only, fixed_income starved to 0%).
+    assert by_bucket["cash"] == pytest.approx(0.20, abs=1e-3)
+    for bucket in ("equity", "fixed_income", "commodity"):
+        assert 0.24 < by_bucket[bucket] < 0.30, (bucket, by_bucket[bucket])
+
+    # Every risky asset's PURE prior (no views, no cap) has positive
+    # expected excess return under the corrected convention.
+    prior = pd.Series(diag["equilibrium_prior"])
+    risky = prior[_MULTI_ASSET_CLASS_BUCKET.reindex(prior.index) != "cash"]
+    assert (risky > 0).all()
+
+
+def test_black_litterman_strategy_legacy_no_views_matches_deployed_bug():
+    # The same no-views setup under excess_return_prior: false (the
+    # legacy/deployed convention) reproduces the bug ANALYSIS_V4 Sec
+    # 2.1 measured: the low-vol (low-Pi) bucket is starved to 0% while
+    # a high-vol (high-Pi) bucket piles up to its combined per-asset
+    # cap -- kept reproducible for the Phase-2 side-by-side ablation.
+    cfg = _no_view_cfg()
+    cfg["black_litterman"]["excess_return_prior"] = False
+    returns = _multi_vol_returns(_MULTI_ASSET_CLASS_BUCKET.index)
+    rf_series = pd.Series(0.04, index=returns.index)
+
+    strategy_fn = strategy.black_litterman_strategy(
+        _MULTI_ASSET_CLASS_BUCKET, cfg, POSTURE_CFG, market_ticker="EQ1",
+        rf_series=rf_series,
+    )
+    weights = strategy_fn(returns.index[-1], returns)
+    by_bucket = weights.groupby(_MULTI_ASSET_CLASS_BUCKET).sum()
+
+    assert by_bucket["fixed_income"] == pytest.approx(0.0, abs=1e-6)
+    assert by_bucket["commodity"] > 0.45  # piled up near 3 x its 20% cap
+    # Not the corrected (~26/28/26/20) split.
+    assert not (
+        0.24 < by_bucket["equity"] < 0.30
+        and 0.24 < by_bucket["fixed_income"] < 0.30
+        and 0.24 < by_bucket["commodity"] < 0.30
+    )
 
 
 def test_black_litterman_strategy_passes_meanrev_eligible_through(
@@ -593,60 +780,49 @@ def test_black_litterman_strategy_calls_momentum_view(monkeypatch):
     assert captured["rf_series"] is rf_series
 
 
-def test_black_litterman_strategy_rf_lookup_ignores_future_values(
-    monkeypatch,
-):
+def test_black_litterman_strategy_rf_lookup_ignores_future_values():
     # A no-lookahead canary for the rf lookup: rf_series contains a
     # future rate change well after the decision date, but the
     # decision must only see what was prevailing at (or before) as_of.
-    captured = []
-    original = allocation.black_litterman
-
-    def spy(prior, cov, P, Q, Omega, tau):
-        captured.append(prior.copy())
-        return original(prior, cov, P, Q, Omega, tau)
-
-    monkeypatch.setattr(allocation, "black_litterman", spy)
-
+    # Observed via the diagnostics sink's "rf" key, which reflects the
+    # looked-up prevailing rate regardless of excess_return_prior.
     returns = _iid_returns()
     change_date = returns.index[900]
     rf_series = pd.Series(0.01, index=returns.index)
     rf_series.loc[change_date:] = 0.05
 
+    diag = {}
     strategy_fn = strategy.black_litterman_strategy(
-        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series,
+        record=diag.update,
     )
     earlier_date = returns.index[700]
     strategy_fn(earlier_date, returns.loc[:earlier_date])
 
-    assert captured[-1]["BIL"] == pytest.approx(0.01)
+    assert diag["rf"] == pytest.approx(0.01)
 
 
-def test_black_litterman_strategy_rf_defaults_zero_before_series_start(
-    monkeypatch,
-):
-    captured = {}
-    original = allocation.black_litterman
-
-    def spy(prior, cov, P, Q, Omega, tau):
-        captured["prior"] = prior.copy()
-        return original(prior, cov, P, Q, Omega, tau)
-
-    monkeypatch.setattr(allocation, "black_litterman", spy)
-
+def test_black_litterman_strategy_rf_defaults_zero_before_series_start():
     returns = _iid_returns()
     rf_series = pd.Series(0.03, index=returns.index[500:])
 
+    diag = {}
     strategy_fn = strategy.black_litterman_strategy(
-        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+        CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series,
+        record=diag.update,
     )
     early_date = returns.index[100]
     strategy_fn(early_date, returns.loc[:early_date])
 
-    assert captured["prior"]["BIL"] == 0.0
+    assert diag["rf"] == 0.0
 
 
-def test_black_litterman_strategy_passes_rf_to_utility_select(monkeypatch):
+def test_black_litterman_strategy_excess_prior_passes_zero_to_utility_select(
+    monkeypatch,
+):
+    # Default convention: mu_bl is already excess, so utility_select
+    # must receive opt_rf=0.0 regardless of the prevailing rf -- else
+    # it would double-subtract (ANALYSIS_V4 Sec 2.1, the root cause).
     captured = {}
     original = allocation.utility_select
 
@@ -660,6 +836,30 @@ def test_black_litterman_strategy_passes_rf_to_utility_select(monkeypatch):
     rf_series = pd.Series(0.045, index=returns.index)
     strategy_fn = strategy.black_litterman_strategy(
         CLASS_BUCKET, BL_CFG, POSTURE_CFG, rf_series=rf_series
+    )
+    strategy_fn(returns.index[-1], returns)
+
+    assert captured["rf"] == 0.0
+
+
+def test_black_litterman_strategy_legacy_passes_rf_to_utility_select(
+    monkeypatch,
+):
+    captured = {}
+    original = allocation.utility_select
+
+    def spy(candidates, mu, cov, risk_aversion, **kwargs):
+        captured["rf"] = kwargs.get("rf")
+        return original(candidates, mu, cov, risk_aversion, **kwargs)
+
+    monkeypatch.setattr(allocation, "utility_select", spy)
+
+    cfg = copy.deepcopy(BL_CFG)
+    cfg["black_litterman"]["excess_return_prior"] = False
+    returns = _iid_returns()
+    rf_series = pd.Series(0.045, index=returns.index)
+    strategy_fn = strategy.black_litterman_strategy(
+        CLASS_BUCKET, cfg, POSTURE_CFG, rf_series=rf_series
     )
     strategy_fn(returns.index[-1], returns)
 

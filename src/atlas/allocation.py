@@ -85,10 +85,32 @@ def covariance_matrix(
     method: str = "ledoit_wolf",
     periods_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> pd.DataFrame:
-    """Annualized asset covariance. `method` is 'ledoit_wolf' (shrunk,
-    the config default) or 'sample' (plain sample covariance)."""
+    """Annualized asset covariance. `method`:
+      - 'ledoit_wolf' (shrunk, the config default): sklearn's plain
+        Ledoit-Wolf on raw returns. Its shrinkage target is average
+        variance x identity, which in a universe where variances
+        differ by ~1000x (e.g. a T-bill ETF vs. silver) pulls every
+        asset's variance toward that single global average -- even a
+        few percent shrinkage can inflate a near-zero-vol asset's
+        variance by an order of magnitude (ANALYSIS_V4 Sec 2.4: BIL
+        measured ~12.8x).
+      - 'ledoit_wolf_corr': shrink the CORRELATION matrix instead --
+        standardize returns by their own sample vol (so every column
+        has ~unit variance, making the shrinkage target's average
+        variance ~1 regardless of the universe's actual vol spread),
+        Ledoit-Wolf that, then rescale by the outer product of sample
+        vols to restore each asset's own variance exactly. Shrinkage
+        now only pulls CORRELATIONS toward 0, never a low-vol asset's
+        variance toward the universe average.
+      - 'sample': plain sample covariance, no shrinkage.
+    """
     if method == "ledoit_wolf":
         cov = LedoitWolf().fit(returns.values).covariance_
+    elif method == "ledoit_wolf_corr":
+        std = returns.std(ddof=1).to_numpy()
+        standardized = returns.to_numpy() / std
+        corr_shrunk = LedoitWolf().fit(standardized).covariance_
+        cov = np.outer(std, std) * corr_shrunk
     elif method == "sample":
         cov = returns.cov().values
     else:

@@ -444,8 +444,17 @@ def _decide(
 
     # Surface (never swallow) a regime-model fallback: strategy.py drops
     # to a neutral posture on an HMM fit failure or thin history.
+    # `fallback_reason` (ANALYSIS_V4 Sec 2.3a) distinguishes the two
+    # causes explicitly; its absence (older diagnostics) falls back to
+    # the previous, less specific wording via "current_state"'s absence.
     regime = bl_diag.get("regime", {})
-    if "current_state" not in regime:
+    reason = regime.get("fallback_reason")
+    if reason is not None:
+        messages.append(
+            f"Regime model fallback ({reason}); posture defaulted to "
+            f"{regime.get('posture')!r}."
+        )
+    elif "current_state" not in regime:
         messages.append(
             "Regime model produced no state read (thin history or fit "
             f"fallback); posture defaulted to {regime.get('posture')!r}."

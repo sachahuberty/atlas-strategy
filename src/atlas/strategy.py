@@ -276,16 +276,20 @@ def _resolve_delta(
 def _bl_diagnostics(
     as_of: pd.Timestamp,
     rf: float,
+    opt_rf: float,
     delta: float,
     posture: str,
     regime_result: dict | None,
+    regime_fallback_reason: str | None,
     prior: pd.Series,
     mu_bl: pd.Series,
+    mu_bl_total: pd.Series,
     view_sets: list,
     cov: pd.DataFrame,
     candidates: dict[str, pd.Series],
     selected: pd.Series,
     bcfg: dict,
+    excess_return_prior: bool,
 ) -> dict:
     """Assemble a JSON-serializable snapshot of one weekly Black-
     Litterman decision for the live runner's diagnostics sink (S8
@@ -293,6 +297,16 @@ def _bl_diagnostics(
     computed inside `strategy_fn`: it never influences the selection,
     and is only built when a `record` callback is supplied, so ordinary
     backtest/ablation callers pay nothing for it.
+
+    `rf` is the prevailing risk-free rate (display/provenance only,
+    e.g. the report's "rf" line); `opt_rf` is the rate actually passed
+    to `max_sharpe`/`utility_select` this week -- 0.0 under the fixed
+    `excess_return_prior` convention (ANALYSIS_V4 Sec 2.1: `mu_bl` is
+    already an excess return, so subtracting `rf` again would double-
+    count it), or `rf` under the legacy (pre-fix) convention kept for
+    the Phase-2 side-by-side ablation. `mu_bl_total` = `mu_bl + rf`,
+    reported alongside `mu_bl` so both excess and total expected
+    returns are visible regardless of which convention produced them.
     """
     tickers = prior.index
     prior_arr = prior.to_numpy()
@@ -324,9 +338,10 @@ def _bl_diagnostics(
         vol = metrics.portfolio_vol(wa, cov)
         books[name] = {
             "exp_return": exp_ret,
+            "exp_return_total": float(wa @ mu_bl_total.reindex(wa.index)),
             "vol": vol,
             "utility": float(
-                metrics.utility(exp_ret, vol, gate_aversion, rf=rf)
+                metrics.utility(exp_ret, vol, gate_aversion, rf=opt_rf)
             ),
             "weights": {t: float(v) for t, v in wa.items()},
         }
@@ -340,7 +355,23 @@ def _bl_diagnostics(
     ranked = sorted((b["utility"] for b in books.values()), reverse=True)
     utility_margin = float(ranked[0] - ranked[1]) if len(ranked) > 1 else None
 
+    # 100%-cash reference row (ANALYSIS_V4 Sec 2.1): by construction
+    # cash has 0 excess return and 0 vol, so its utility is always
+    # exactly 0 -- a reference point for whether the gate's winner
+    # actually clears "do nothing", not a candidate the gate picks
+    # from. Added after utility_margin so it never competes for the
+    # winner/runner-up margin.
+    books["cash"] = {
+        "exp_return": 0.0,
+        "exp_return_total": float(rf),
+        "vol": 0.0,
+        "utility": 0.0,
+        "weights": {},
+    }
+
     regime = {"posture": posture}
+    if regime_fallback_reason is not None:
+        regime["fallback_reason"] = regime_fallback_reason
     if regime_result is not None:
         states = regime_result["states"]
         current_state = int(states.iloc[-1])
@@ -367,11 +398,13 @@ def _bl_diagnostics(
     return {
         "as_of": as_of.isoformat(),
         "rf": float(rf),
+        "excess_return_prior": excess_return_prior,
         "delta": float(delta),
         "regime": regime,
         "equilibrium_prior": {t: float(v) for t, v in prior.items()},
         "views_fired": views_fired,
         "mu_bl": {t: float(v) for t, v in mu_bl.items()},
+        "mu_bl_total": {t: float(v) for t, v in mu_bl_total.items()},
         "candidate_books": books,
         "gate": {
             "type": bcfg["gate"],
@@ -397,20 +430,30 @@ def black_litterman_strategy(
     1. Detect the HMM posture (same guard/fallback pattern as
        regime_switching_strategy).
     2. Equilibrium prior Pi from `permanent()`'s asset-class weights
-       (notebook 08: "equilibrium returns from asset-class weights"),
-       with the `cash` bucket's entry overridden by the prevailing
-       risk-free rate (see `rf_series` below) rather than Pi's near-
-       zero implied return for a zero-covariance asset.
+       (notebook 08: "equilibrium returns from asset-class weights").
+       Pi = delta*Sigma*w_mkt is an EXCESS return (He-Litterman reverse
+       optimization: delta is calibrated as (E[Rm]-Rf)/sigma_m^2, so Pi
+       already has rf removed). Under the default
+       `black_litterman.excess_return_prior: true` (ANALYSIS_V4 Sec
+       2.1), it is used as-is, including for `cash` (whose Pi is ~0 by
+       construction -- a zero-covariance asset's equilibrium EXCESS
+       return over itself is correctly ~0, not the prevailing rate).
+       `false` keeps the legacy (deployed-through-2026-10) behavior for
+       the Phase-2 side-by-side ablation: `cash`'s prior is overridden
+       to the prevailing risk-free rate, treating Pi as if it were a
+       total return.
     3. V1 (regime posture -> asset-class view), V2 (mean-reversion),
        V3 (technical), V5 (dual momentum) each contribute views; V4
        (sentiment) is omitted here -- still live-only (see
-       sentiment.py).
-    4. Fuse into mu_BL via Black-Litterman.
-    5. max_sharpe(mu_BL, Sigma, rf) is the primary book; GMV and Risk
-       Parity are defensive/fallback books; `cfg["black_litterman"]
+       sentiment.py). Views add a tilt relative to `prior`'s own scale
+       (excess under the default convention), so they need no
+       adjustment either way.
+    4. Fuse into mu_BL via Black-Litterman -- same scale as `prior`.
+    5. max_sharpe(mu_BL, Sigma, opt_rf) is the primary book; GMV and
+       Risk Parity are defensive/fallback books; `cfg["black_litterman"]
        ["gate"]` picks whichever wins:
        - "utility" (default): mean-variance utility_select (using
-         mu_BL and rf for all three candidates).
+         mu_BL and opt_rf for all three candidates).
        - "off": always the max_sharpe book, no gating at all.
        - "vol_floor": the max_sharpe book unless its volatility
          exceeds `vol_floor_multiplier` x GMV's volatility, in which
@@ -420,11 +463,21 @@ def black_litterman_strategy(
          stage 11's gate ablation, notebook 11, measured the "off"
          and A-sensitivity arms before this option was added).
 
+    `opt_rf` (the rate actually passed to max_sharpe/utility_select) is
+    0.0 when `excess_return_prior` is true -- mu_BL is already excess,
+    so subtracting the prevailing rate again would double-count it
+    (ANALYSIS_V4 Sec 2.1, the root-cause bug: cash's prior overridden
+    to rf AND rf subtracted again downstream, pushing 19 of 22 assets'
+    implied excess return below cash and producing an unintended
+    high-volatility/commodity tilt) -- or `rf` when false (legacy,
+    double-subtracting on purpose to reproduce the deployed arm).
+
     `rf_series`, if given, is an annual risk-free rate indexed by
     date (e.g. FRED DTB3/100); the prevailing rate as of each `as_of`
     (via `.asof`, so never a future value) is used as `rf` throughout
-    this week's decision. Defaults to a constant 0.0 (the stage 1-10
-    total-return convention) if omitted.
+    this week's decision (display/provenance, and the legacy cash
+    override/double-subtraction when `excess_return_prior` is false).
+    Defaults to a constant 0.0 if omitted.
 
     `meanrev_eligible`, if given (stage 11 Tier 3), restricts V2's
     view to tickers in that index -- see `meanreversion.
@@ -452,6 +505,7 @@ def black_litterman_strategy(
     cov_method = cfg["optimization"]["covariance"]
     market_ticker = market_ticker or cfg["regimes"]["market_ticker"]
     bcfg = cfg["black_litterman"]
+    excess_return_prior = bcfg.get("excess_return_prior", True)
     market_weights = allocation.permanent(class_bucket)
     cash_tickers = class_bucket[class_bucket == "cash"].index
 
@@ -466,16 +520,23 @@ def black_litterman_strategy(
                 rf = float(looked_up)
         market_returns = window[market_ticker]
         regime_result = None
+        regime_fallback_reason = None
         if not regimes.has_enough_history(market_returns, cfg):
             posture = "neutral"
+            regime_fallback_reason = "insufficient_history"
         else:
             try:
                 regime_result = regimes.market_regime(
                     market_returns, cfg, posture_cfg
                 )
                 posture = regime_result["current_posture"]
-            except (ValueError, np.linalg.LinAlgError):
+            except (ValueError, np.linalg.LinAlgError) as exc:
                 posture = "neutral"
+                # ANALYSIS_V4 Sec 2.3a: a degenerate HMM fit (NaN
+                # params, ~2% of OOS fits) must not fail silently --
+                # surfaced here instead of only being inferable from
+                # the absence of "current_state" in diagnostics.
+                regime_fallback_reason = f"hmm_fit_degenerate: {exc}"
 
         recent = window.tail(lookback)
         cov = allocation.covariance_matrix(recent, method=cov_method)
@@ -485,13 +546,15 @@ def black_litterman_strategy(
         prior = allocation.equilibrium_returns(
             market_weights.reindex(tickers).fillna(0.0), cov, delta
         )
-        # Pi is ~0 for cash by construction (near-zero covariance with
-        # everything), regardless of the prevailing rate -- overriding
-        # it with the actual risk-free rate is what fixes the cash
-        # degeneracy at its source (see docstring).
-        priced_cash = cash_tickers.intersection(tickers)
-        if len(priced_cash) > 0:
-            prior.loc[priced_cash] = rf
+        if not excess_return_prior:
+            # Legacy (pre-ANALYSIS_V4) behavior, kept only for the
+            # Phase-2 side-by-side ablation: treats Pi as a total
+            # return by overriding cash's ~0 excess prior with the
+            # prevailing rate -- then opt_rf below subtracts rf a
+            # second time from every other asset's already-excess Pi.
+            priced_cash = cash_tickers.intersection(tickers)
+            if len(priced_cash) > 0:
+                prior.loc[priced_cash] = rf
 
         prices = (1.0 + window).cumprod()
         if meanreversion.has_enough_history(prices, cfg):
@@ -532,19 +595,31 @@ def black_litterman_strategy(
         mu_bl = allocation.black_litterman(
             prior, cov, P, Q, Omega, bcfg["tau"]
         )
+        # 0.0 under the fixed convention: mu_bl is already excess, so
+        # max_sharpe/utility_select must not subtract rf a second time
+        # (ANALYSIS_V4 Sec 2.1). `rf` under the legacy convention,
+        # reproducing the original double subtraction on purpose.
+        opt_rf = rf if not excess_return_prior else 0.0
+        mu_bl_total = mu_bl + rf
 
         candidates = {
-            "black_litterman": allocation.max_sharpe(mu_bl, cov, cfg, rf=rf),
+            "black_litterman": allocation.max_sharpe(
+                mu_bl, cov, cfg, rf=opt_rf
+            ),
             "gmv": allocation.gmv(cov, cfg),
             "risk_parity": allocation.risk_parity(cov, cfg),
         }
-        selected = _select_gated_candidate(candidates, mu_bl, cov, bcfg, rf)
+        selected = _select_gated_candidate(
+            candidates, mu_bl, cov, bcfg, opt_rf
+        )
 
         if record is not None:
             record(
                 _bl_diagnostics(
-                    as_of, rf, delta, posture, regime_result, prior, mu_bl,
+                    as_of, rf, opt_rf, delta, posture, regime_result,
+                    regime_fallback_reason, prior, mu_bl, mu_bl_total,
                     view_sets, cov, candidates, selected, bcfg,
+                    excess_return_prior,
                 )
             )
         return selected
@@ -595,11 +670,16 @@ def bucket_black_litterman_strategy(
     on each bucket's weight -- a bucket is not a single concentrated
     position the way an individual asset is, so the tighter per-asset
     cap doesn't apply at this level of abstraction.
+
+    Respects `black_litterman.excess_return_prior` identically to
+    `black_litterman_strategy` (ANALYSIS_V4 Sec 2.1/6 Tier 1 action
+    5) -- same prior, same double-subtraction bug, same fix.
     """
     lookback = cfg["optimization"]["lookback_days"]
     cov_method = cfg["optimization"]["covariance"]
     market_ticker = market_ticker or cfg["regimes"]["market_ticker"]
     bcfg = cfg["black_litterman"]
+    excess_return_prior = bcfg.get("excess_return_prior", True)
 
     bucket_cfg = dict(cfg)
     bucket_cfg["constraints"] = dict(cfg["constraints"])
@@ -647,8 +727,8 @@ def bucket_black_litterman_strategy(
         prior = allocation.equilibrium_returns(
             market_weights_bucket, cov, delta
         )
-        if "cash" in prior.index:
-            prior.loc["cash"] = rf
+        if not excess_return_prior and "cash" in prior.index:
+            prior.loc["cash"] = rf  # legacy convention, see asset-level fn
 
         view_set = views.regime_view(posture, bucket_identity, prior, cfg)
         P, Q, Omega, _ = views.assemble(
@@ -657,16 +737,17 @@ def bucket_black_litterman_strategy(
         mu_bl = allocation.black_litterman(
             prior, cov, P, Q, Omega, bcfg["tau"]
         )
+        opt_rf = rf if not excess_return_prior else 0.0
 
         candidates = {
             "black_litterman": allocation.max_sharpe(
-                mu_bl, cov, bucket_cfg, rf=rf
+                mu_bl, cov, bucket_cfg, rf=opt_rf
             ),
             "gmv": allocation.gmv(cov, bucket_cfg),
             "risk_parity": allocation.risk_parity(cov, bucket_cfg),
         }
         selected_bucket = _select_gated_candidate(
-            candidates, mu_bl, cov, bcfg, rf
+            candidates, mu_bl, cov, bcfg, opt_rf
         )
         return buckets.expand_bucket_weights(selected_bucket, class_bucket)
 

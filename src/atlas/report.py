@@ -490,9 +490,11 @@ def _gate_block(bl) -> str:
         chosen = name == selected
         cls = " class='chosen'" if chosen else ""
         mark = " <span class='pick'>selected</span>" if chosen else ""
+        ref = " <span class='cap-flag'>reference</span>" if name == "cash" else ""
         rows.append(
-            f"<tr{cls}><td>{escape(name)}{mark}</td>"
+            f"<tr{cls}><td>{escape(name)}{mark}{ref}</td>"
             f"<td class='num'>{_signed_pct(b.get('exp_return'))}</td>"
+            f"<td class='num'>{_signed_pct(b.get('exp_return_total'))}</td>"
             f"<td class='num'>{_pct(b.get('vol'))}</td>"
             f"<td class='num'>{_num(b.get('utility'), 5)}</td></tr>"
         )
@@ -506,12 +508,15 @@ def _gate_block(bl) -> str:
     return (
         "<h3>The gate (where the decision happens)</h3>"
         "<table class='gate'><thead><tr><th>Candidate book</th>"
-        "<th class='num'>Exp. excess ret</th><th class='num'>Vol</th>"
+        "<th class='num'>Exp. excess ret</th><th class='num'>Exp. total ret</th>"
+        "<th class='num'>Vol</th>"
         "<th class='num'>Utility</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"<p class='note'>Gate: {escape(str(gate.get('type')))} "
         f"(risk aversion {escape(str(gate.get('risk_aversion')))}). "
-        f"{margin_txt}</p>"
+        f"{margin_txt} \"cash\" is a 100%-cash reference row (0 excess "
+        "return, 0 vol, 0 utility by construction), not a candidate the "
+        "gate selects from.</p>"
     )
 
 
