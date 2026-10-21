@@ -65,7 +65,7 @@ Before forming any opinion, the strategy asks: *what returns would each asset ne
 
 This is **reverse optimisation**. Given a reference allocation (here, an equally-weighted split across the four main buckets) and the observed covariances between assets, you can back out the expected returns implied by that allocation. These are the **equilibrium returns** — the market's implicit view, before we add anything of our own.
 
-One adjustment: cash's implied return comes out near zero by construction, because cash barely moves with anything else. Since T-bills actually paid 4–5% through much of the test period, the cash bucket's equilibrium return is overridden with the **actual 13-week T-bill yield** from the Federal Reserve's database. Without this, the model would systematically misprice the single most reliable asset in the universe.
+**Correction (found 2026-10-18, see §7):** the equilibrium returns this step produces are *excess* returns — expected return *above* the cash rate, not above zero. For a year and a half this detail was missed: cash's own equilibrium return (which legitimately comes out near zero, since cash barely moves with anything else) was overridden with the actual T-bill yield instead, and then the portfolio-construction step in §5 subtracted the T-bill yield a *second* time from every other asset. The net effect was subtracting the cash rate twice from everything except cash itself — with T-bills near 4%, that pushed most assets' adjusted expected return below cash's, and the model ended up holding whatever was volatile enough to survive the double deduction, which is not what any of its signals were actually saying. Cash's equilibrium return is no longer overridden; it is used exactly as reverse optimisation produces it, and the T-bill rate is subtracted exactly once, at the portfolio-construction step in §5. See §7 for what this changes.
 
 ### Step 3 — Form opinions ("views")
 
@@ -74,6 +74,8 @@ Each signal module produces a **view**: a statement of the form *"asset X will r
 Two views are active in the current configuration:
 
 - **V1 — Regime view.** If the HMM says risk-on, equities are assigned an expected return 3 percentage points above equilibrium. If risk-off, bonds and commodities get the boost instead. If neutral, no view is expressed at all. This operates at the asset-class level, which is the natural granularity for a regime signal.
+
+  **In practice, this has been "add 3% to equities when calm," not a three-way switch.** Two separate problems keep risk-off from firing out of sample. First, a labelling bug (fixed 2026-10-18): the model picks a posture by comparing each fitted state's risk profile against a fixed scale, but the comparison used to shrink toward the middle whenever only two of the model's states actually showed up in a given week — which made risk-off tie with neutral and lose by coin-flip-like tie-breaking, however extreme the volatile state really was. Fixed, so risk-off can now actually be reached. Second, even reachable, the HMM only recognises a crash from the volatility that follows it, by which point the 2%-per-week turnover cap makes a full defensive repositioning take the better part of a year — too slow to matter for a sharp, already-over shock, useful mainly for a slow-grinding one. Across the entire 2014–2026 test history, risk-off posture was active in essentially none of the out-of-sample weeks. The honest description of V1 today is a calm-market equity tilt, not the three-way regime switch the design called for.
 - **V2 — Mean-reversion view.** For assets that have stretched unusually far from their recent trend, the model expects partial reversion. This is filtered heavily: the asset must pass a statistical stationarity test (Augmented Dickey-Fuller), have a reversion half-life under 60 days, not be in an unusual volatility spike, and — critically — belong to the subset of tickers that historically showed genuine reversion behaviour (8 of 22 qualified, tested on in-sample data only).
 
 Three further view families were built, measured, and switched off. That story is §8.
@@ -130,7 +132,8 @@ Friday close
  1. HMM reads market state ──────────────► posture (risk-on / neutral / risk-off)
     │
  2. Reverse-optimise neutral portfolio ──► equilibrium expected returns
-    │                                       (cash priced at the real T-bill rate)
+    │                                       (excess returns; T-bill rate added
+    │                                        back exactly once, at step 5)
     │
  3. Signals form views ──────────────────► V1 regime tilt, V2 mean-reversion
     │
@@ -168,6 +171,8 @@ This is where most of the project's effort went, and it is the part worth defend
 
 ## 7. Results
 
+**Update, 2026-10-18: the "+0.9 points a year of alpha" this section used to report was not real skill — it was the double-counted-T-bill-rate bug described in §4, and it has been corrected.** The table and reading below are kept as the original, honest record of what was measured before the bug was found (nothing here was faked or cherry-picked), followed by what changed once it was fixed.
+
 Test period: January 2022 to July 2026, out of sample, net of costs.
 
 | Strategy | Return | Volatility | Sharpe | Sharpe vs. cash | Max drawdown |
@@ -191,6 +196,28 @@ Two caveats, both important:
 2. **The same machinery underperforms in the design period.** Run over 2014–2021, ATLAS scores worse than the benchmark on risk-adjusted terms and suffers a −32% drawdown against the benchmark's −18%. The edge is regime-dependent, not persistent.
 
 Note also that minimum variance and hierarchical risk parity show **negative Sharpe ratios versus cash**: over this period they did not beat T-bills at all. Their attractive-looking total-return Sharpes are an artefact of measuring against a zero risk-free rate in a 5% rate environment.
+
+### What actually explains the "+0.9 points a year," and the corrected numbers
+
+Both caveats above turned out to share one cause. Tracing the model's own reasoning (why does it hold 42% of its risk in one silver ETF; why does it rate its own portfolio as barely beating cash) led to the double-counted T-bill rate in §4: the model was, to first order, "hold whatever is the most volatile asset allowed under the 20% cap," because only the highest-volatility assets' expected returns survived having the cash rate subtracted from them twice. That is not a view about markets; it is an artefact of the bug. Measuring each asset's own volatility against how often it was actually held across the whole 2014–2026 history confirms it directly: before the fix, the two track almost in lock-step (a rank correlation of about +0.7); after the fix, that relationship is gone (it even mildly reverses).
+
+This also explains why the strategy looked good in 2022–2026 and bad in 2014–2021: commodities (the most volatile bucket, and the bug's favourite) lost money in the first period and gained over 20% a year in the second. The "edge" was a hidden, unsized bet on commodity volatility, placed by accident, that happened to pay off in the window being used for the headline number.
+
+**Corrected, over the same two windows plus the full 12-year history:**
+
+| Window | Strategy | Return | Volatility | Sharpe vs. cash | Max drawdown |
+|---|---|---|---|---|---|
+| 2014–2021 | Permanent | 3.9% | 7.9% | 0.43 | −19.7% |
+| 2014–2021 | ATLAS (bug) | 4.2% | 13.5% | 0.32 | −31.5% |
+| 2014–2021 | **ATLAS (corrected)** | **5.3%** | **10.0%** | **0.50** | **−23.5%** |
+| 2022–2026 | Permanent | 9.9% | 8.8% | 0.66 | −13.4% |
+| 2022–2026 | ATLAS (bug) | 14.2% | 14.4% | 0.72 | −16.6% |
+| 2022–2026 | **ATLAS (corrected)** | **10.7%** | **10.7%** | **0.63** | **−15.9%** |
+| 2014–2026 | Permanent | 6.0% | 8.3% | 0.52 | −19.7% |
+| 2014–2026 | ATLAS (bug) | 7.8% | 13.8% | 0.47 | −31.5% |
+| 2014–2026 | **ATLAS (corrected)** | **7.2%** | **10.2%** | **0.55** | **−23.5%** |
+
+Fixed, ATLAS roughly **ties the Permanent Portfolio over the full twelve years** (0.55 vs 0.52) with a noticeably shallower drawdown than the buggy version (−23.5% vs −31.5%, though still deeper than Permanent's own −19.7%). The 2022–2026 "outperformance" shrinks and the 2014–2021 "underperformance" shrinks too — both move toward Permanent, because both were the same mispriced bet, not two separate, opposite findings. **The honest conclusion is that the model's own signals add little measurable edge over a simple 25/25/25/25 split; the earlier apparent edge was an accidental volatility bet, not evidence of skill.**
 
 ---
 
@@ -221,7 +248,7 @@ All three rejected modules remain in the codebase with their tests and their mea
 - **The portfolio is concentrated.** With a 20% cap and an optimiser that wants more concentration than that, the book typically holds exactly five positions, all at the cap. A recent snapshot: BIL, IWM, QQQ, VEA, SLV.
 - **Loosening the cap makes it worse, not better.** At a 50% cap the return collapses to 4.5%, because the unconstrained optimiser piles into low-volatility short-duration bonds. The cap is effectively forcing the strategy to take risk, not just diversifying it.
 - **Risk aversion has saturated.** Lowering the utility-gate parameter below 2 changes nothing — the max-Sharpe book already wins nearly every week. There is no dial left that buys more return.
-- **Known limitation in the expected-return model.** The reverse-optimisation step uses a standard risk-aversion constant borrowed from equity-market convention. Applied to a low-volatility multi-asset reference portfolio, it implies an equity risk premium of only about 2.1% — roughly half any credible estimate. Combined with a 5% cash rate, this means that for much of 2023–2025 the model believed almost nothing in the universe beat cash. It still produced portfolios, because the maximum-Sharpe objective optimises a ratio regardless. Correcting this constant improves test-period results but degrades design-period results, so it has not been adopted; the principled fix is to estimate it from data each week rather than fixing it by convention.
+- **A past misdiagnosis, corrected.** An earlier pass noticed that the model seemed to believe almost nothing in the universe beat cash for much of 2023–2025, and attributed it to the risk-aversion constant in the reverse-optimisation step being miscalibrated for a low-volatility multi-asset reference portfolio (implying an equity risk premium of only ~2.1%, roughly half any credible estimate). Re-deriving an asset-specific version of that constant from recent data each week was tried and made results worse in both the design and test periods. The symptom (almost nothing beating cash) was real; the diagnosis was wrong. The actual cause was the double-counted T-bill rate described in §4 — once that was fixed, the "nothing beats cash" symptom went away on its own, and the risk-aversion constant was left exactly as it was.
 
 ---
 
@@ -229,9 +256,9 @@ All three rejected modules remain in the codebase with their tests and their mea
 
 ATLAS is a complete, working implementation of institutional multi-asset allocation machinery: regime detection, Bayesian view blending, constrained optimisation, anomaly-based de-risking, and realistic execution — validated with a rigour that is unusual outside professional research.
 
-The strategy delivers the highest raw return of any book tested and modestly beats a risk-matched benchmark over the test window. It does not beat that benchmark on risk-adjusted terms without leverage, and the edge does not replicate in the earlier period.
+The strategy delivers the highest raw return of any book tested and modestly beats a risk-matched benchmark over the test window — though §7's update found that edge was itself a mispriced bet, not skill, once corrected ATLAS roughly ties the benchmark over the full history instead. It does not beat that benchmark on risk-adjusted terms without leverage, and (even before the correction) the edge did not replicate in the earlier period.
 
-The most valuable output is arguably not the equity curve but the evidence trail. Over the project's life the analysis discovered that the strategy had silently degenerated into a minimum-variance fund for four and a half years, that its execution layer was throttling every signal it produced, that two of its most sophisticated signals actively destroyed value, and that one apparent improvement was an artefact of the wrong performance metric. Each was found by measurement, corrected, and documented — including the ones that made results worse.
+The most valuable output is arguably not the equity curve but the evidence trail. Over the project's life the analysis discovered that the strategy had silently degenerated into a minimum-variance fund for four and a half years, that its execution layer was throttling every signal it produced, that two of its most sophisticated signals actively destroyed value, that one apparent improvement was an artefact of the wrong performance metric, and — the largest single finding — that the risk-free rate was being subtracted twice, which had been quietly driving the model into a volatility bet it never intended to place. Each was found by measurement, corrected, and documented — including the ones that made results worse.
 
 The conclusion the evidence supports: **a well-diversified static allocation is a genuinely hard benchmark to beat, and the value of this kind of machinery lies less in the returns it generates than in the discipline required to know whether those returns are real.**
 

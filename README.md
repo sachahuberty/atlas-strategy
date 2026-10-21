@@ -151,7 +151,44 @@ built to produce. **On an excess-return basis (net of the T-bill
 rate, which averaged ~3-4% through this window), `hrp` and `gmv`
 still don't beat cash at all** -- their excess Sharpes are negative.
 
-### Is there real alpha? The risk-matched benchmark
+### Is there real alpha? No -- ANALYSIS_V4 traced it to a bug (2026-10-18)
+
+**Correction, read this first:** the section below this note was written
+before ANALYSIS_V4.md found that Black-Litterman's equilibrium prior
+(`Pi = delta*Sigma*w_mkt`, an EXCESS return) was being treated as a
+TOTAL return: `strategy.black_litterman_strategy` overrode `cash`'s
+near-zero prior to the risk-free rate, then `max_sharpe`/`utility_select`
+subtracted the risk-free rate a SECOND time from every asset's
+already-excess expected return. With T-bills near 4%, only the
+highest-volatility assets' inflated implied excess return survived that
+double subtraction -- the pipeline was, to first order, "hold whatever
+is most volatile up to the 20% cap," not expressing any of its views.
+Across 2014-2026 the deployed strategy's per-asset weight carries a
+**+0.67 Spearman rank correlation with that asset's own volatility**
+(independently reproduced here over a continuous `backtest.run` from
+2010-2026; ANALYSIS_V4's own harness measured **+0.85** on a different
+window/omitted-module combination -- same conclusion, different
+magnitude). Fixed and corrected, that correlation **flips to -0.22**.
+
+That accidental high-volatility, commodity-heavy tilt is what the
+"alpha" below actually was: commodities returned **-2.2%/yr in
+2014-2021** (ATLAS lost to Permanent, see the next section) and
+**+21.0%/yr in 2022-2026** (ATLAS beat it, see the table just below) --
+the same unpriced bet, paid in one window and punished in the other,
+not persistent skill. **The honest conclusion is that the signals add
+little measurable edge over the anchor; the unintended volatility bet
+happened to pay off in 2022-2026.** The two sections below (the
+risk-matched alpha claim, and its IS reversal) are kept verbatim as the
+original, independently-reproduced evidence for this -- not deleted,
+per this project's standing discipline of keeping every measured result
+-- followed by the corrected numbers in a new section after them.
+`black_litterman.excess_return_prior` (default `true`) is the fix;
+`false` reproduces the bug exactly for side-by-side comparison. See
+`ANALYSIS_V4.md` Sec 2.1 for the full derivation and the live run that
+surfaced it (42% of portfolio risk in one silver ETF, 19 of 22 assets
+expected to lose to cash).
+
+---
 
 Total Sharpe alone can't answer whether ATLAS adds genuine skill or
 just takes more risk than `permanent` and gets paid for it the way
@@ -214,6 +251,90 @@ The honest, publishable claim is not "ATLAS has alpha" -- it is
 in-sample result is the real out-of-sample test this project's own
 "development-set OOS, not virgin OOS" framing (top of this section)
 already flagged as necessary.
+
+### ANALYSIS_V4: the corrected numbers, all three windows
+
+Independently re-measured here (not copied from ANALYSIS_V4.md) by
+re-running the shipped decision/backtest code itself
+(`strategy.black_litterman_strategy`, `backtest.run`, no separate
+harness) over a single continuous 2010-2026 walk, sliced into
+IS/OOS/full for reporting. V2 (mean-reversion) and the anomaly override
+are omitted here to match ANALYSIS_V4's own harness (both independently
+measured near-zero marginal contributors in the stage-11 ablation
+below) -- expect small differences from both ANALYSIS_V4's numbers and
+the project's other OOS tables for that reason, not exact matches.
+Every arm below reuses the exact same `config.yaml` except the one flag
+or method named.
+
+| Window | Strategy | Ann. return | Ann. vol | Excess Sharpe | Max drawdown | Avg weekly turnover |
+| --- | --- | --- | --- | --- | --- | --- |
+| IS 2014-2021 | permanent | 3.91% | 7.9% | 0.433 | -19.7% | 0.5% |
+| IS 2014-2021 | deployed (the bug) | 4.24% | 13.5% | 0.323 | -31.5% | 1.7% |
+| IS 2014-2021 | **corrected (current default)** | **5.31%** | **10.0%** | **0.496** | **-23.5%** | **1.0%** |
+| OOS 2022-2026 | permanent | 9.86% | 8.8% | 0.659 | -13.4% | 0.7% |
+| OOS 2022-2026 | deployed (the bug) | 14.18% | 14.4% | 0.716 | -16.6% | 1.5% |
+| OOS 2022-2026 | **corrected (current default)** | **10.68%** | **10.7%** | **0.632** | **-15.9%** | **1.0%** |
+| full 2014-2026 | permanent | 6.04% | 8.3% | 0.520 | -19.7% | 0.6% |
+| full 2014-2026 | deployed (the bug) | 7.76% | 13.8% | 0.472 | -31.5% | 1.6% |
+| full 2014-2026 | **corrected (current default)** | **7.23%** | **10.2%** | **0.547** | **-23.5%** | **1.0%** |
+
+**Corrected, ATLAS ties Permanent over the full 12-year period (excess
+Sharpe 0.547 vs. 0.520) at a meaningfully shallower drawdown than the
+deployed version (-23.5% vs. -31.5%), though still somewhat deeper than
+Permanent's own (-19.7%).** The OOS "alpha" is gone (excess Sharpe 0.716
+-> 0.632, now *below* Permanent's 0.659 in that window) because it was
+never alpha -- it was the volatility tilt, and OOS 2022-2026 is exactly
+the window that tilt happened to pay in. The IS number improves
+instead (0.323 -> 0.496) for the same reason: the tilt was punished
+there, and removing it removes the punishment too.
+
+Each fix's marginal effect in isolation (excess Sharpe; B and C are
+each "deployed + that one fix", X stacks the mapping fix since the
+excess-return fix only matters once the regime view can actually
+reach `risk_off`, matching ANALYSIS_V4's own arm definitions):
+
+| Arm | IS exSharpe | OOS exSharpe | Full exSharpe |
+| --- | --- | --- | --- |
+| permanent (benchmark) | 0.433 | 0.659 | 0.520 |
+| A. deployed (the bug) | 0.323 | 0.716 | 0.472 |
+| B. + posture-mapping fix | 0.320 | 0.703 | 0.466 |
+| C. + correlation-shrinkage covariance | 0.321 | 0.727 | 0.475 |
+| X. B + excess-return fix | 0.498 | 0.540 | 0.514 |
+| **ALL fixes (current default config)** | **0.496** | **0.632** | **0.547** |
+
+B and C alone barely move the number either direction -- consistent
+with ANALYSIS_V4's own finding that both are correctness fixes, not
+performance levers (`ledoit_wolf_corr` was adopted as the new
+`optimization.covariance` default on this evidence: ~0 effect on
+returns, and no reason left to prefer the less correct method). X (the
+excess-return fix) is the one that matters, and it moves the number in
+both directions at once -- down OOS, up IS -- exactly as the
+volatility-tilt explanation predicts.
+
+Average weight by asset class also tells the story (full period):
+
+| Asset class | permanent | deployed (the bug) | corrected |
+| --- | --- | --- | --- |
+| equity | 26.7% | 52.3% | 43.8% |
+| fixed_income | 26.7% | 8.1% | 28.0% |
+| commodity | 26.7% | 26.5% | 23.7% |
+| cash | 20.0% | 12.1% | 4.4% |
+| real_estate | 0.0% | 1.1% | 0.1% |
+
+The deployed pipeline nearly doubled Permanent's equity weight and
+starved fixed_income to a third of its anchor share -- a volatility
+bet, not a view. Corrected, the book still tilts away from the naive
+25/25/25/25 anchor (less cash, more equity than Permanent), but
+fixed_income is back near its anchor weight instead of being starved,
+and the tilt is no longer simply "whatever is most volatile."
+
+**No number above disagrees with ANALYSIS_V4.md's own reference table
+(Sec 4) by more than ~0.02 excess Sharpe** -- several in-sample
+max-drawdown figures match to the decimal (B: -31.1%, C: -31.4%, both
+exact matches here), arm X's full-period max drawdown matches exactly
+too (-21.1% both), and arm X's full-period excess Sharpe (0.514 in
+ANALYSIS_V4.md, 0.514 measured independently here) agrees to three
+decimal places despite the two harnesses being built separately.
 
 ### Self-calibrating delta: tested, and it makes things worse in both windows (ANALYSIS_V3.md Sec 4/6.2)
 
@@ -441,6 +562,29 @@ project**, not failures to edit out.
     equilibrium prior's direction, not just its size). `black_
     litterman.delta_mode` stays `fixed`; the self-calibrating path,
     its tests, and this negative result all stay in the codebase.
+18. **ANALYSIS_V4.md Sec 2.1/6 Tier 1 action 5: the risk-free rate was
+    being subtracted twice, and it explains the "alpha" above.** The
+    live system's first run surfaced it (42% of portfolio risk in one
+    silver ETF, a book the model's own utility gate rated as barely
+    beating cash); tracing it back found `black_litterman_strategy`
+    treating the equilibrium prior (already an excess return) as a
+    total return. Fixed via `black_litterman.excess_return_prior`
+    (default `true`; `false` reproduces the bug for comparison) -- see
+    "ANALYSIS_V4: the corrected numbers, all three windows" above for
+    the full re-measurement. Two smaller, independent correctness
+    fixes shipped alongside it, both measured to have ~0 effect on
+    returns (correctness fixes, not performance levers): the HMM
+    posture mapping could never reach `risk_off` with only 2 visited
+    states (a 0..(n-1) empirical scale tied with `neutral`'s target
+    score; rescaled to 0..2), and `optimization.covariance` gained
+    `ledoit_wolf_corr` (shrink the correlation matrix, not raw
+    covariance, so a near-zero-vol asset like BIL doesn't get
+    shrunk toward the universe's average variance) -- adopted as the
+    new default on this measurement. `config.yaml`'s `anomaly` block
+    also had its `epochs`/`patience`/`refit_frequency_days` quietly
+    diverged from what notebooks 09/11 actually validated (overridden
+    locally, never written back); it is now the single source both
+    read.
 
 **Combined Tier-1 result: Sharpe 0.7382, essentially unchanged from
 before any of these three fixes, and identical to plain GMV.** A

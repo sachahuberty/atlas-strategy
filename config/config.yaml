@@ -343,20 +343,21 @@ black_litterman:
 
 optimization:
   objective: max_sharpe            # on BL posterior returns
-  covariance: ledoit_wolf          # shrunk covariance. Other option:
-                                    # "ledoit_wolf_corr" (ANALYSIS_V4 Sec
-                                    # 2.4/6 Tier 1 action 7): shrinks the
-                                    # correlation matrix instead of raw
-                                    # covariance, so a near-zero-vol asset
-                                    # (e.g. BIL) keeps its own sample
-                                    # variance instead of being inflated
-                                    # toward the universe's average variance
-                                    # (measured ~12.8x inflation under plain
-                                    # ledoit_wolf). Not yet the default --
-                                    # Phase 2 measures its OOS impact first
-                                    # (measured near-zero on returns, a
-                                    # correctness fix not a performance
-                                    # lever; see ANALYSIS_V4.md Sec 2.4/4).
+  covariance: ledoit_wolf_corr     # shrinks the CORRELATION matrix, not raw
+                                    # covariance (ANALYSIS_V4 Sec 2.4/6 Tier 1
+                                    # action 7), so a near-zero-vol asset
+                                    # (e.g. BIL) keeps its own sample variance
+                                    # instead of being inflated toward the
+                                    # universe's average variance (measured
+                                    # ~12.8x inflation under plain
+                                    # "ledoit_wolf", still available as the
+                                    # other option). Made the default after
+                                    # Phase 2's side-by-side measurement
+                                    # (ANALYSIS_V4.md Sec 2.4/4): ~0 effect on
+                                    # returns either way (full-period excess
+                                    # Sharpe 0.472 -> 0.475 in isolation), so
+                                    # there is no performance reason to prefer
+                                    # the less correct method.
   risk_aversion_levels: [2, 5, 10] # utility comparison (S1/S3)
   lookback_days: 756               # trailing window for mu/cov, ~3Y (S6 convention)
 
