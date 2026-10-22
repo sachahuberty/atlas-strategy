@@ -104,6 +104,13 @@ back on any non-failed outcome via a concurrency-guarded job, uploads
 the report as a workflow artifact regardless of outcome, and surfaces
 held vs traded vs failed as distinct annotations in the Actions tab.
 
+**Live record restarted 2026-10-21 after the ANALYSIS_V4 corrections;
+earlier weeks archived.** The one week funded under the pre-fix
+double-counted-risk-free-rate bug (decision 2026-10-09) is kept at
+`live/archive/pre_v4/` as the audit trail, not deleted; `live/state.json`
+was removed so the next scheduled run re-funds the book from cash under
+the corrected config.
+
 ## Results
 
 Out-of-sample, cost-inclusive, 2022-01 to 2026-07 (notebook 09),
