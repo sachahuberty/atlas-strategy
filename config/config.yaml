@@ -351,13 +351,25 @@ optimization:
                                     # universe's average variance (measured
                                     # ~12.8x inflation under plain
                                     # "ledoit_wolf", still available as the
-                                    # other option). Made the default after
-                                    # Phase 2's side-by-side measurement
-                                    # (ANALYSIS_V4.md Sec 2.4/4): ~0 effect on
-                                    # returns either way (full-period excess
-                                    # Sharpe 0.472 -> 0.475 in isolation), so
-                                    # there is no performance reason to prefer
-                                    # the less correct method.
+                                    # other option). Chosen on CORRECTNESS
+                                    # grounds, not because its effect on
+                                    # returns is negligible: measured on the
+                                    # BUGGY (deployed) pipeline the effect
+                                    # genuinely is ~0 (full-period excess
+                                    # Sharpe 0.472 -> 0.475, Phase 2's arm
+                                    # A -> C). But on the CORRECTED pipeline
+                                    # (excess_return_prior: true + the
+                                    # posture-mapping fix) the effect is NOT
+                                    # negligible: README.md's ablation table
+                                    # (arm X -> ALL) measures IS 0.498 -> 0.496
+                                    # (~0), OOS 0.540 -> 0.632 (+0.09), full
+                                    # 0.514 -> 0.547 (+0.03) -- part of the
+                                    # corrected pipeline's OOS headline rests
+                                    # on this covariance choice, not only the
+                                    # excess-return fix. See README.md's
+                                    # Results section for the full disclosure
+                                    # and the X-arm's own (plain ledoit_wolf)
+                                    # OOS number reported alongside.
   risk_aversion_levels: [2, 5, 10] # utility comparison (S1/S3)
   lookback_days: 756               # trailing window for mu/cov, ~3Y (S6 convention)
 
