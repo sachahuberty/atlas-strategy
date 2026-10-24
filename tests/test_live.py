@@ -147,13 +147,27 @@ def _mock_fixed_decision(monkeypatch, market, target):
     monkeypatch.setattr(live, "compute_meanrev_eligible", _no_meanrev)
 
 
-def _seed_state(path, weights, weights_as_of, last_decision="2000-01-01"):
+def _seed_state(
+    path,
+    weights,
+    weights_as_of,
+    last_decision="2000-01-01",
+    excess_return_prior=True,
+):
+    """Seed an initialized state. `excess_return_prior` defaults to
+    `True` (matching config.yaml's default) so every existing caller
+    automatically carries a MATCHING record and never trips the
+    ANALYSIS_V4 external-review spec-match guard; pass `None` to omit
+    it (a pre-guard state) or `False` to seed a genuine mismatch, for
+    tests that specifically exercise that guard."""
     st = state_mod.empty_state()
     st["initialized"] = True
     st["weights"] = {t: float(v) for t, v in weights.items()}
     st["weights_as_of"] = pd.Timestamp(weights_as_of).isoformat()
     st["last_decision_date"] = last_decision
     st["run_count"] = 1
+    if excess_return_prior is not None:
+        st["excess_return_prior"] = excess_return_prior
     state_mod.save_state(st, path)
     return path
 
@@ -830,3 +844,111 @@ def test_history_row_carries_book_return_net_column(tmp_path, monkeypatch):
     assert "book_return_net" in hist.columns
     assert "book_return" in hist.columns
     assert pd.notna(hist["book_return_net"].iloc[-1])
+
+
+# --------------------------------------------------------------------- #
+# Specification-mismatch guard (ANALYSIS_V4 external-review): never
+# trade an initialized book forward under a different (or unrecorded)
+# black_litterman.excess_return_prior than it was built under -- this
+# is exactly how a second buggy week got appended to the live record
+# before this guard existed.
+# --------------------------------------------------------------------- #
+def test_check_spec_match_noop_when_uninitialized():
+    live._check_spec_match({"initialized": False}, data.load_config())
+
+
+def test_check_spec_match_raises_on_missing_record():
+    with pytest.raises(live.SpecificationMismatchError):
+        live._check_spec_match({"initialized": True}, data.load_config())
+
+
+def test_check_spec_match_raises_on_mismatch():
+    cfg = data.load_config()
+    assert cfg["black_litterman"]["excess_return_prior"] is True
+    with pytest.raises(live.SpecificationMismatchError):
+        live._check_spec_match(
+            {"initialized": True, "excess_return_prior": False}, cfg
+        )
+
+
+def test_check_spec_match_ok_when_matching():
+    cfg = data.load_config()
+    live._check_spec_match(
+        {"initialized": True, "excess_return_prior": True}, cfg
+    )
+
+
+def test_run_once_fails_on_state_with_no_recorded_spec(tmp_path, monkeypatch):
+    # A state that predates this guard entirely (no excess_return_prior
+    # key at all) must FAIL, not silently trade forward.
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = _seed_state(
+        tmp_path / "state.json", {"CA": 1.0}, as_of, excess_return_prior=None
+    )
+    before = sp.read_bytes()
+
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_FAILED
+    assert res.exit_code == live.EXIT_FAILED
+    assert "excess_return_prior" in res.messages[0]
+    assert sp.read_bytes() == before  # never mutate on error
+
+
+def test_run_once_fails_on_state_with_different_spec(tmp_path, monkeypatch):
+    # A book built under the legacy (false) convention must not be
+    # traded forward under the corrected (true) config.
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = _seed_state(
+        tmp_path / "state.json",
+        {"CA": 1.0},
+        as_of,
+        excess_return_prior=False,
+    )
+    before = sp.read_bytes()
+
+    cfg = data.load_config()
+    assert cfg["black_litterman"]["excess_return_prior"] is True
+    res = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    assert res.status == live.STATUS_FAILED
+    assert res.exit_code == live.EXIT_FAILED
+    assert "excess_return_prior" in res.messages[0]
+    assert sp.read_bytes() == before
+
+
+def test_run_once_succeeds_and_persists_spec_when_matching(
+    tmp_path, monkeypatch
+):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = _seed_state(
+        tmp_path / "state.json", {"CA": 1.0}, as_of, excess_return_prior=True
+    )
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+
+    saved = state_mod.load_state(sp)
+    assert saved["excess_return_prior"] is True
+    assert "config_hash" in saved and saved["config_hash"]
+
+
+def test_funding_run_persists_spec_for_the_next_run(tmp_path, monkeypatch):
+    # The funding path (uninitialized -> initialized) must also record
+    # the spec, so the VERY NEXT run has something to check against.
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = tmp_path / "state.json"  # absent -> uninitialized
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+
+    saved = state_mod.load_state(sp)
+    assert saved["excess_return_prior"] is True

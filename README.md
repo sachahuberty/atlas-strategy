@@ -134,12 +134,19 @@ the prior week's executed one-way turnover times
 Context chart plots the net series, labelled "net of 10 bp transaction
 costs"; the gross column is kept in the CSV for anyone who wants it.
 
-**Live record restarted 2026-10-21 after the ANALYSIS_V4 corrections;
-earlier weeks archived.** The one week funded under the pre-fix
-double-counted-risk-free-rate bug (decision 2026-10-09) is kept at
-`live/archive/pre_v4/` as the audit trail, not deleted; `live/state.json`
-was removed so the next scheduled run re-funds the book from cash under
-the corrected config.
+**Live record restart takes effect with the first corrected run
+(expected: the Monday 2026-10-26 14:00 UTC catch-up cron, deciding
+2026-10-23), not 2026-10-21 as originally planned.** The local
+ANALYSIS_V4 fixes (Phases 0-3) were not pushed to `origin/master` before
+the Saturday 2026-10-18 and 2026-10-24 crons ran, so both the original
+funding decision (2026-10-09) *and* the following week's continuation
+decision (2026-10-16) executed under the pre-fix double-counted-
+risk-free-rate bug -- same five-asset, 20%-each book both times. Both
+weeks are now archived at `live/archive/pre_v4/` (including the full
+`history.csv` covering both) as the audit trail, not deleted;
+`live/state.json` was removed so the next run funds the book from cash
+under the corrected config, verified by dry run to produce a
+diversified ~21-holding book with no asset above ~6.2%.
 
 ## Results
 

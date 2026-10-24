@@ -99,6 +99,22 @@ class RiskFreeUnavailableError(HeldError):
     silently fall back to rf=0."""
 
 
+class SpecificationMismatchError(Exception):
+    """An initialized state carries no record of (or a different)
+    `black_litterman.excess_return_prior` than the current config.
+
+    Deliberately NOT a `HeldError`: this is not a transient condition a
+    retry next week would resolve on its own -- the book on disk was
+    built under a different (possibly pre-fix) specification than the
+    one about to decide its next trade, and trading forward from it
+    would silently blend two incompatible pipelines (exactly how a
+    second buggy week got appended to the live record before this
+    guard existed, ANALYSIS_V4 external-review). `run_once` turns this
+    into `STATUS_FAILED` -- a human must archive/reset the state
+    deliberately before the book can resume trading.
+    """
+
+
 @dataclass
 class MarketData:
     """Everything the weekly decision needs from the data layer.
@@ -246,6 +262,38 @@ def _check_rf_staleness(
         )
 
 
+def _check_spec_match(current_state: dict, cfg: dict) -> None:
+    """Refuse to trade an initialized book forward under a different
+    `black_litterman.excess_return_prior` than the one it was built
+    under (ANALYSIS_V4 external-review guard): a book with no recorded
+    setting at all (it predates this guard) is treated the same as a
+    mismatch, since either way the stored book's actual provenance is
+    unknown/different and trading forward from it would silently blend
+    two incompatible pipelines -- exactly how a second buggy week got
+    appended to the live record before this guard existed. A no-op on
+    an uninitialized state (nothing to mismatch against yet)."""
+    if not current_state.get("initialized"):
+        return
+    current_excess = cfg["black_litterman"].get("excess_return_prior", True)
+    stored_excess = current_state.get("excess_return_prior")
+    if stored_excess is None:
+        raise SpecificationMismatchError(
+            "Initialized state has no recorded "
+            "black_litterman.excess_return_prior (it predates this "
+            "guard); refusing to trade forward from a book of unknown "
+            "specification. Archive/reset the state deliberately, then "
+            "resume."
+        )
+    if stored_excess != current_excess:
+        raise SpecificationMismatchError(
+            "State was built under black_litterman.excess_return_prior="
+            f"{stored_excess!r}, but the current config has "
+            f"{current_excess!r}. Refusing to trade a book built under a "
+            "different specification. Archive/reset the state "
+            "deliberately, then resume."
+        )
+
+
 def compute_meanrev_eligible(prices: pd.DataFrame, cfg: dict) -> pd.Index:
     """V2's eligible-ticker set, computed IS-only exactly as notebook 09
     freezes it: `meanreversion.hit_rate_eligible_tickers` over the price
@@ -370,8 +418,13 @@ def run_once(
         mutation, exit 2
       - already run for this as_of -> STATUS_ALREADY_RUN, no mutation,
         exit 0
-      - any unexpected exception -> STATUS_FAILED, no mutation, exit 1
-        (full traceback in `messages`)
+      - an initialized state with no recorded (or a different)
+        `black_litterman.excess_return_prior` than the current config
+        -> STATUS_FAILED, no mutation, exit 1 (`SpecificationMismatchError`,
+        ANALYSIS_V4 external-review guard: never trade a book forward
+        under a specification it wasn't built under)
+      - any other unexpected exception -> STATUS_FAILED, no mutation,
+        exit 1 (full traceback in `messages`)
     A model fit failure is NOT a held week: `strategy.py`'s own guards
     fall back to a neutral posture; that fallback is surfaced in
     `messages`, never swallowed.
@@ -388,6 +441,11 @@ def run_once(
         # Load state first: a corrupt state file must fail loudly (via
         # state.load_state) rather than let us trade on lost memory.
         current_state = state_mod.load_state(state_path)
+        # Checked before any data download: an initialized book built
+        # under a different (or unrecorded) excess_return_prior setting
+        # must FAIL outright, never trade forward (ANALYSIS_V4 external-
+        # review guard).
+        _check_spec_match(current_state, cfg)
 
         market = fetch_data(cfg)
 
@@ -605,6 +663,18 @@ def _decide(
         # START of next week's reconciliation window, so that window's
         # cost basis is THIS week's executed turnover, not its own.
         new_state["last_one_way_executed"] = float(sizing.executed_one_way)
+        # The specification this book was just built under (ANALYSIS_V4
+        # external-review guard), read from `cfg` -- the same lookup
+        # `strategy.black_litterman_strategy` itself uses -- rather
+        # than back out of `bl_diag`, which stays empty whenever the
+        # decision function is swapped out entirely (e.g. a fixed-
+        # target test double), not just whenever the fix is off.
+        # Checked by `_check_spec_match` against the config of every
+        # future run before it is allowed to trade this book forward.
+        new_state["excess_return_prior"] = cfg["black_litterman"].get(
+            "excess_return_prior", True
+        )
+        new_state["config_hash"] = diagnostics["config_hash"]
         state_mod.save_state(new_state, state_path)
 
     return RunResult(
