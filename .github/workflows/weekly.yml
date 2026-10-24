@@ -2,9 +2,21 @@ name: Weekly allocation
 
 # Saturday 02:00 UTC: after the US Friday close settles, and DST-safe
 # (UTC never shifts). Also runnable on demand with an optional as_of.
+#
+# Monday 14:00 UTC (external-review Phase B2): when Friday is a market
+# holiday, Saturday's run finds the current week's data stopping before
+# Friday and HOLDS (live.resolve_as_of's StaleDataError guard) -- that
+# week is never decided unless something runs again. Monday's reference
+# falls on a NEW ISO week, so live.resolve_as_of resolves to the prior
+# (holiday-shortened) week's last trading day and decides it. On a
+# normal week, Saturday already decided that same date, so Monday's run
+# is STATUS_ALREADY_RUN -- a true no-op (live.write_run_outputs/
+# run_weekly.py: no history row, no weekly dir, no report re-render),
+# so the commit step below finds nothing to commit.
 on:
   schedule:
     - cron: "0 2 * * 6"
+    - cron: "0 14 * * 1"
   workflow_dispatch:
     inputs:
       as_of:

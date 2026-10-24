@@ -101,11 +101,21 @@ class RiskFreeUnavailableError(HeldError):
 
 @dataclass
 class MarketData:
-    """Everything the weekly decision needs from the data layer."""
+    """Everything the weekly decision needs from the data layer.
+
+    `rf_true_last_date` (external-review Phase B1) is FRED's own last
+    valid DTB3 observation, captured BEFORE `rf_series` is reindexed
+    onto the price calendar and forward-filled. The reindex/ffill makes
+    `rf_series` itself look fresh through `last_price_date` even when
+    the underlying FRED series is stale -- `rf_true_last_date` is what
+    the live runner actually checks for staleness and reports in
+    diagnostics (see `fetch_data`, `_check_rf_staleness`).
+    """
 
     returns: pd.DataFrame
     prices: pd.DataFrame
     rf_series: pd.Series
+    rf_true_last_date: pd.Timestamp
     class_bucket: pd.Series
     tickers: list[str]
     last_price_date: pd.Timestamp
@@ -214,6 +224,28 @@ def resolve_as_of(
     return max(candidates)
 
 
+def _check_rf_staleness(
+    as_of: pd.Timestamp,
+    rf_true_last_date: pd.Timestamp,
+    max_staleness_days: int,
+) -> None:
+    """Hold rather than decide on a stale risk-free series (ANALYSIS_V4
+    external-review Phase B1). `rf_true_last_date` is FRED's own last
+    valid observation (see `MarketData`'s docstring) -- DTB3 normally
+    lags `as_of` by 1-2 business days; the max historical gap in the
+    cached 2010-2026 series is 4 calendar days (holiday weekends), so
+    the default 7-day threshold never trips in normal operation and
+    only catches a genuine multi-day FRED outage.
+    """
+    gap_days = (as_of - rf_true_last_date).days
+    if gap_days > max_staleness_days:
+        raise RiskFreeUnavailableError(
+            f"Risk-free series stale: last FRED observation "
+            f"{rf_true_last_date.date()} is {gap_days} days before as_of "
+            f"{as_of.date()} (max {max_staleness_days}); holding this week."
+        )
+
+
 def compute_meanrev_eligible(prices: pd.DataFrame, cfg: dict) -> pd.Index:
     """V2's eligible-ticker set, computed IS-only exactly as notebook 09
     freezes it: `meanreversion.hit_rate_eligible_tickers` over the price
@@ -247,6 +279,11 @@ def fetch_data(cfg: dict) -> MarketData:
         rf_raw = data.download_macro(
             [fred_series], start=cfg["general"]["start_date"]
         )
+        # Captured BEFORE the reindex/ffill below, which otherwise masks
+        # staleness behind the last PRICE date (ANALYSIS_V4 external-
+        # review Phase B1): a FRED outage would still leave rf_series
+        # looking "fresh" through today's close.
+        rf_true_last_date = rf_raw[fred_series].dropna().index.max()
         rf_series = (
             (rf_raw[fred_series] / 100.0).reindex(returns.index).ffill()
         )
@@ -264,6 +301,7 @@ def fetch_data(cfg: dict) -> MarketData:
         returns=returns,
         prices=prices,
         rf_series=rf_series,
+        rf_true_last_date=rf_true_last_date,
         class_bucket=class_bucket,
         tickers=tickers,
         last_price_date=prices.index.max(),
@@ -361,6 +399,11 @@ def run_once(
                 f"Latest available close {market.last_price_date.date()} is "
                 f"before as_of {resolved_as_of.date()}; holding this week."
             )
+        _check_rf_staleness(
+            resolved_as_of,
+            market.rf_true_last_date,
+            cfg["risk_free"]["max_staleness_days"],
+        )
 
         already = current_state.get("last_decision_date")
         if already == resolved_as_of.isoformat():
@@ -400,7 +443,11 @@ def _decide(
     messages: list[str] = []
 
     # 1. Reconcile: drift last week's stored weights forward to as_of.
-    performance: dict = {"book_return": None, "permanent_return": None}
+    performance: dict = {
+        "book_return": None,
+        "book_return_net": None,
+        "permanent_return": None,
+    }
     if current_state.get("initialized"):
         stored = state_mod.weights_series(current_state)
         anchor = pd.Timestamp(current_state["weights_as_of"])
@@ -415,10 +462,31 @@ def _decide(
         # it never feeds the decision.
         cap = cfg["constraints"]["per_asset_cap"]
         perm = allocation.permanent(market.class_bucket, cap=cap)
+        gross_book_return = _realized_week_return(
+            stored, market.prices, anchor, as_of
+        )
+        # Net of the cost of the trade that executed at the START of
+        # this window (external-review Phase B3): that trade was SIZED
+        # at the prior decision (`anchor`), not this one, so its
+        # one-way turnover is read back from what THAT run persisted,
+        # not from this week's `sizing` (computed below). Same formula
+        # backtest.run charges on the execution day (backtest.py:
+        # `cost_today = cost_rate * pending_turnover`, subtracted from
+        # that one day's simple return before it compounds forward) --
+        # here applied directly to the week's cumulative return, which
+        # differs from backtest.run's day-then-compound order only by a
+        # second-order (cost x subsequent-day-return) term far below
+        # this reporting's precision.
+        cost_rate = cfg["rebalance"]["transaction_cost_bps"] / 1e4
+        prior_one_way = float(current_state.get("last_one_way_executed", 0.0))
+        book_return_net = (
+            gross_book_return - cost_rate * prior_one_way
+            if gross_book_return is not None
+            else None
+        )
         performance = {
-            "book_return": _realized_week_return(
-                stored, market.prices, anchor, as_of
-            ),
+            "book_return": gross_book_return,
+            "book_return_net": book_return_net,
             "permanent_return": _realized_week_return(
                 perm, market.prices, anchor, as_of
             ),
@@ -479,7 +547,6 @@ def _decide(
             f"one-way, executed {sizing.executed_one_way:.4f}."
         )
 
-    rf_as_of = market.rf_series.dropna()
     diagnostics = {
         "as_of": as_of.isoformat(),
         "is_funding": is_funding,
@@ -505,11 +572,13 @@ def _decide(
         "performance": performance,
         "data": {
             "prices_as_of": market.last_price_date.isoformat(),
-            "rf_as_of": (
-                rf_as_of.index.max().isoformat()
-                if not rf_as_of.empty
-                else None
-            ),
+            # FRED's own last valid observation (ANALYSIS_V4 external-
+            # review Phase B1), NOT the last price date: `rf_series`
+            # itself is ffilled onto the price calendar, so reading its
+            # own index.max() here would always report freshness
+            # through today's close regardless of how stale the
+            # underlying FRED series actually is.
+            "rf_as_of": market.rf_true_last_date.isoformat(),
         },
         "config_hash": _config_hash(cfg),
     }
@@ -531,6 +600,11 @@ def _decide(
         new_state["run_count"] = int(current_state.get("run_count", 0)) + 1
         new_state["last_run_utc"] = run_utc.isoformat()
         new_state["last_status"] = STATUS_OK
+        # This decision's one-way turnover, for NEXT week's net-of-cost
+        # book_return (Phase B3): the trade sized here executes at the
+        # START of next week's reconciliation window, so that window's
+        # cost basis is THIS week's executed turnover, not its own.
+        new_state["last_one_way_executed"] = float(sizing.executed_one_way)
         state_mod.save_state(new_state, state_path)
 
     return RunResult(
@@ -608,10 +682,19 @@ def write_run_outputs(
     weights), trades.csv (current/target/executed), and
     diagnostics.json, and appends one summary row to `live/history.csv`.
     A non-ok result writes only the history row (no weekly directory,
-    since there are no weights). Returns the weekly directory, or None.
+    since there are no weights) -- EXCEPT `STATUS_ALREADY_RUN`, which is
+    a TRUE no-op (external-review Phase B2): that outcome means this
+    `as_of` was already decided and committed by an earlier run (e.g.
+    Saturday's cron), so a later run for the same date (e.g. the Monday
+    holiday-catch-up cron) must touch NOTHING -- no history row, no
+    weekly directory -- so the scheduler's `git diff --cached --quiet`
+    finds no changes to commit. Returns the weekly directory, or None.
     """
     base = Path(base_dir) if base_dir is not None else LIVE_DIR
     base.mkdir(parents=True, exist_ok=True)
+
+    if result.status == STATUS_ALREADY_RUN:
+        return None
 
     as_of_label = (
         result.as_of.date().isoformat() if result.as_of else "unknown"
@@ -659,9 +742,13 @@ def _append_history(result: RunResult, base: Path, as_of_label: str) -> None:
         "one_way_wanted": result.one_way_turnover_wanted,
         "one_way_executed": result.one_way_executed,
         "cap_binding": result.cap_binding,
-        # Realized gross weekly returns accumulate into the report's
-        # context equity curve (None on funding / non-ok weeks).
+        # Realized weekly returns accumulate into the report's context
+        # equity curve (None on funding / non-ok weeks). `book_return`
+        # is gross; `book_return_net` (Phase B3) subtracts the prior
+        # week's execution cost using backtest.run's own cost formula --
+        # kept alongside, not replacing, the gross column.
         "book_return": perf.get("book_return"),
+        "book_return_net": perf.get("book_return_net"),
         "permanent_return": perf.get("permanent_return"),
         "messages": " | ".join(result.messages),
     }

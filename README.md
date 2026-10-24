@@ -99,12 +99,40 @@ unavailable -- no trade, state unchanged), `1` failed (unexpected error;
 state left byte-identical). Any non-ok outcome mutates nothing.
 
 **Scheduler:** `.github/workflows/weekly.yml` runs the above every
-Saturday 02:00 UTC (and on demand via *Run workflow*, with an optional
-`as_of`). It needs a `FRED_API_KEY` repository secret (it fails fast if
-absent rather than degrading to a false "held"), commits the results
+Saturday 02:00 UTC, plus a **Monday 14:00 UTC catch-up run** (external
+review Phase B2): when Friday is a market holiday, Saturday's run finds
+that week's data stopping before Friday and HOLDS rather than guess, so
+nothing ever decides that week unless something runs again. Monday
+falls on a new ISO week, so `live.resolve_as_of` resolves back to the
+holiday-shortened week's actual last trading day and decides it. On an
+ordinary week, Saturday already decided that same date, so Monday's run
+is `already_run` -- a true no-op (no history row, no weekly directory,
+no report re-render, nothing for the commit step to find). Both crons
+are also runnable on demand via *Run workflow*, with an optional
+`as_of`. The job needs a `FRED_API_KEY` repository secret (it fails fast
+if absent rather than degrading to a false "held"), commits the results
 back on any non-failed outcome via a concurrency-guarded job, uploads
 the report as a workflow artifact regardless of outcome, and surfaces
 held vs traded vs failed as distinct annotations in the Actions tab.
+
+**Risk-free freshness (external review Phase B1):** `rf_as_of` in
+diagnostics and the report footer is FRED's own last valid DTB3
+observation, not the last price date -- reindexing/ffilling the rf
+series onto the price calendar would otherwise mask a stale FRED feed
+behind an always-fresh-looking series. `risk_free.max_staleness_days`
+(default 7) holds the week (`RiskFreeUnavailableError`, never a silent
+`rf=0`) if that observation is older than `as_of` by more than that
+many days; DTB3 normally lags 1-2 business days and the worst gap in
+the cached 2010-2026 series is 4 calendar days (holiday weekends), so 7
+never trips in normal operation.
+
+**Net-of-cost NAV (external review Phase B3):** `live/history.csv`
+carries both `book_return` (gross) and `book_return_net` (gross minus
+the prior week's executed one-way turnover times
+`rebalance.transaction_cost_bps`/1e4 -- the same cost formula
+`backtest.run` charges on the trade's execution day). The report's
+Context chart plots the net series, labelled "net of 10 bp transaction
+costs"; the gross column is kept in the CSV for anyone who wants it.
 
 **Live record restarted 2026-10-21 after the ANALYSIS_V4 corrections;
 earlier weeks archived.** The one week funded under the pre-fix

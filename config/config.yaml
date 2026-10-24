@@ -17,6 +17,21 @@ risk_free:
                                    # degeneracy at its source (stage 11,
                                    # DIAGNOSTIC.md Sec 2.3/6 action 3)
                                    # instead of excluding the asset.
+  max_staleness_days: 7            # ANALYSIS_V4 external-review Phase B1:
+                                    # live.fetch_data reindexes DTB3 onto
+                                    # the price calendar and ffills, which
+                                    # masks staleness behind the last PRICE
+                                    # date; live.run_once separately checks
+                                    # FRED's own last valid observation
+                                    # against this threshold and HOLDS
+                                    # (never a silent rf=0) if it is older.
+                                    # DTB3 normally lags 1-2 business days;
+                                    # the max historical gap in the cached
+                                    # 2010-2026 series is 4 calendar days
+                                    # (holiday weekends), so 7 gives
+                                    # headroom for normal operation while
+                                    # still catching a genuine multi-day
+                                    # FRED outage.
 
 universe:
   candidate_pool_file: null        # optional CSV of candidate tickers; null = built-in pool

@@ -90,6 +90,7 @@ def _real_market(cfg, seed=7, n=200):
         returns=returns,
         prices=prices,
         rf_series=pd.Series(0.04, index=returns.index),
+        rf_true_last_date=returns.index.max(),
         class_bucket=pd.Series(buckets),
         tickers=tickers,
         last_price_date=prices.index.max(),
@@ -111,6 +112,7 @@ def _toy_market(seed=1, n=40):
         returns=returns,
         prices=prices,
         rf_series=pd.Series(0.03, index=returns.index),
+        rf_true_last_date=returns.index.max(),
         class_bucket=pd.Series(BUCKETS_4),
         tickers=tickers,
         last_price_date=prices.index.max(),
@@ -643,3 +645,188 @@ def test_funding_path_writes_rounded_outputs(tmp_path, monkeypatch):
         for col in cols:
             for w in df[col]:
                 assert abs(w - round(w, 6)) < 1e-9
+
+
+# --------------------------------------------------------------------- #
+# Risk-free freshness (external-review Phase B1): rf_as_of must be
+# FRED's own last valid observation, not the price-calendar-ffilled
+# date, and a stale FRED feed must hold rather than silently use rf=0.
+# --------------------------------------------------------------------- #
+def test_rf_staleness_within_bound_is_ok():
+    live._check_rf_staleness(
+        pd.Timestamp("2026-06-05"), pd.Timestamp("2026-06-03"), 7
+    )  # gap=2 days: must not raise
+
+
+def test_rf_staleness_exceeds_bound_raises():
+    with pytest.raises(live.RiskFreeUnavailableError):
+        live._check_rf_staleness(
+            pd.Timestamp("2026-06-05"), pd.Timestamp("2026-05-26"), 7
+        )  # gap=10 days
+
+
+def test_rf_stale_by_10_days_holds_without_touching_state(
+    tmp_path, monkeypatch
+):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    market.rf_true_last_date = as_of - pd.Timedelta(days=10)
+    monkeypatch.setattr(live, "fetch_data", lambda _cfg: market)
+
+    sp = _seed_state(
+        tmp_path / "state.json", {"CA": 1.0}, as_of - pd.Timedelta(days=7)
+    )
+    before = sp.read_bytes()
+
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_HELD
+    assert sp.read_bytes() == before
+
+
+def test_rf_lag_of_2_days_is_ok(tmp_path, monkeypatch):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    market.rf_true_last_date = as_of - pd.Timedelta(days=2)
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = tmp_path / "state.json"
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+
+
+def test_diagnostics_rf_as_of_is_true_fred_date_not_price_date(
+    tmp_path, monkeypatch
+):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    # The exact bug this guards against: the true FRED date trails the
+    # price calendar's last close, but is still within tolerance.
+    true_rf_date = as_of - pd.Timedelta(days=2)
+    market.rf_true_last_date = true_rf_date
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = tmp_path / "state.json"
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+    assert res.diagnostics["data"]["rf_as_of"] == true_rf_date.isoformat()
+    assert res.diagnostics["data"]["rf_as_of"] != (
+        market.last_price_date.isoformat()
+    )
+
+
+# --------------------------------------------------------------------- #
+# Holiday-Friday catch-up (external-review Phase B2): a Saturday run
+# that holds because Friday is a market holiday must be decidable by a
+# later (Monday) run; an ordinary already-decided week must be a TRUE
+# no-op for that later run.
+# --------------------------------------------------------------------- #
+def test_resolve_as_of_saturday_held_then_monday_decides_thursday():
+    # Good Friday: absent from the calendar, exactly as it would be
+    # from real downloaded prices.
+    calendar = pd.bdate_range("2026-03-01", "2026-04-10").drop(
+        pd.Timestamp("2026-04-03")
+    )
+    saturday = pd.Timestamp("2026-04-04")
+    with pytest.raises(live.StaleDataError):
+        live.resolve_as_of(calendar, reference=saturday)
+
+    monday = pd.Timestamp("2026-04-06")  # a NEW ISO week vs. the holiday one
+    resolved = live.resolve_as_of(calendar, reference=monday)
+    assert resolved == pd.Timestamp("2026-04-02")  # Thursday
+
+
+def test_already_run_is_a_true_noop_no_files_touched(tmp_path, monkeypatch):
+    # Saturday decides an ordinary week; Monday's catch-up run resolves
+    # to the SAME date (already_run) and must touch nothing -- no
+    # history row, no weekly directory -- so the scheduler's
+    # `git diff --cached --quiet` finds no changes to commit.
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    cfg = data.load_config()
+    sp = tmp_path / "state.json"
+    out_dir = tmp_path / "out"
+
+    first = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    assert first.status == live.STATUS_OK
+    assert live.write_run_outputs(first, base_dir=out_dir) is not None
+    state_before = sp.read_bytes()
+    history_before = (out_dir / "history.csv").read_bytes()
+    weekly_before = sorted((out_dir / "weekly").rglob("*"))
+
+    second = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    assert second.status == live.STATUS_ALREADY_RUN
+    result_dir = live.write_run_outputs(second, base_dir=out_dir)
+
+    assert result_dir is None
+    assert sp.read_bytes() == state_before
+    assert (out_dir / "history.csv").read_bytes() == history_before
+    assert sorted((out_dir / "weekly").rglob("*")) == weekly_before
+
+
+# --------------------------------------------------------------------- #
+# Net-of-cost live NAV (external-review Phase B3): book_return_net must
+# subtract the PRIOR week's executed one-way turnover (the trade that
+# executed at the start of this window), using backtest.run's exact
+# cost formula (cost_rate * one-way, not two-way).
+# --------------------------------------------------------------------- #
+def test_book_return_net_subtracts_prior_week_execution_cost(
+    tmp_path, monkeypatch
+):
+    market = _toy_market()
+    weeks = sorted(backtest.week_end_dates(market.returns.index))
+    prev, as_of = weeks[-2], weeks[-1]
+
+    cfg = data.load_config()
+    sp = tmp_path / "state.json"
+
+    target1 = pd.Series({"EQ": 0.4, "FI": 0.3, "CO": 0.2, "CA": 0.1})
+    _mock_fixed_decision(monkeypatch, market, target1)
+    first = live.run_once(as_of=prev, cfg=cfg, state_path=sp)
+    assert first.status == live.STATUS_OK
+    prior_one_way = first.one_way_executed
+    assert prior_one_way > 0  # a real trade, so the cost is non-zero
+
+    target2 = pd.Series({"EQ": 0.3, "FI": 0.3, "CO": 0.2, "CA": 0.2})
+    _mock_fixed_decision(monkeypatch, market, target2)
+    second = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    assert second.status == live.STATUS_OK
+
+    perf = second.diagnostics["performance"]
+    cost_rate = cfg["rebalance"]["transaction_cost_bps"] / 1e4
+    expected_net = perf["book_return"] - cost_rate * prior_one_way
+    assert perf["book_return_net"] == pytest.approx(expected_net, abs=1e-12)
+    assert perf["book_return_net"] != pytest.approx(perf["book_return"])
+
+
+def test_book_return_net_is_none_on_funding_week(tmp_path, monkeypatch):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = tmp_path / "state.json"
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+    assert res.diagnostics["performance"]["book_return_net"] is None
+
+
+def test_history_row_carries_book_return_net_column(tmp_path, monkeypatch):
+    market = _toy_market()
+    weeks = sorted(backtest.week_end_dates(market.returns.index))
+    prev, as_of = weeks[-2], weeks[-1]
+    cfg = data.load_config()
+    sp = tmp_path / "state.json"
+    out_dir = tmp_path / "out"
+
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+    first = live.run_once(as_of=prev, cfg=cfg, state_path=sp)
+    live.write_run_outputs(first, base_dir=out_dir)
+
+    second = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    live.write_run_outputs(second, base_dir=out_dir)
+
+    hist = pd.read_csv(out_dir / "history.csv")
+    assert "book_return_net" in hist.columns
+    assert "book_return" in hist.columns
+    assert pd.notna(hist["book_return_net"].iloc[-1])

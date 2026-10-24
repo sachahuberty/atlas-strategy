@@ -555,20 +555,26 @@ def _context_section(run, history) -> str:
             "Context",
             _placeholder(0),
         )
-    if "book_return" not in hist.columns:
+    # Net-of-cost (external-review Phase B3) is preferred when present;
+    # older history rows that predate this fix fall back to gross, with
+    # the note below labelled accordingly so the chart is never
+    # mislabelled as net when it is actually gross.
+    has_net = "book_return_net" in hist.columns
+    return_col = "book_return_net" if has_net else "book_return"
+    if return_col not in hist.columns:
         return _card("Context", _placeholder(len(hist)))
 
     ok = hist.copy()
     if "status" in ok.columns:
         ok = ok[ok["status"] == _STATUS_OK]
-    ok = ok.dropna(subset=["book_return"])
+    ok = ok.dropna(subset=[return_col])
     n = len(ok)
     if n < _MIN_CONTEXT_WEEKS:
         return _card("Context", _placeholder(n))
 
     try:
         idx = pd.to_datetime(ok["as_of"])
-        book = pd.Series(ok["book_return"].to_numpy(), index=idx)
+        book = pd.Series(ok[return_col].to_numpy(), index=idx)
         curves = {"ATLAS": book}
         has_perm = (
             "permanent_return" in ok.columns
@@ -591,10 +597,17 @@ def _context_section(run, history) -> str:
             f"<td class='num'>{_pct(realized_vol)}</td></tr>"
             "</tbody></table>"
         )
+        note = (
+            "Realized, net of 10 bp transaction costs, since the live "
+            "book was funded."
+            if has_net
+            else "Realized, gross of costs, since the live book was "
+            "funded."
+        )
         return _card(
             "Context",
             f"<div class='chart'>{chart_img}</div>{stats}",
-            note="Realized, gross of costs, since the live book was funded.",
+            note=note,
         )
     except Exception as exc:  # noqa: BLE001
         return _card(

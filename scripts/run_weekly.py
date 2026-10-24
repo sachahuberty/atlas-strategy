@@ -125,7 +125,15 @@ def main(argv: list[str] | None = None) -> int:
         weekly_dir = live.write_run_outputs(result)
         if weekly_dir is not None:
             print(f"  wrote: {weekly_dir}")
-        report_path = _render_report(result)
+        # ALREADY_RUN must be a TRUE no-op (ANALYSIS_V4 external-review
+        # Phase B2): rendering the tracked per-date report.html here
+        # would re-stamp it with a new "generated" timestamp/git SHA
+        # even though nothing about the decision changed, giving the
+        # scheduler's commit step a spurious diff. Only the gitignored
+        # report_latest.html (the CI artifact copy) is refreshed.
+        report_path = _render_report(
+            result, persist_dated_copy=result.status != live.STATUS_ALREADY_RUN
+        )
         print(f"  report: {report_path}")
 
     # Machine-readable status line for the scheduler (distinguishes
@@ -144,14 +152,24 @@ def _load_history() -> pd.DataFrame | None:
         return None
 
 
-def _render_report(result: live.RunResult):
-    """Render the HTML report (degraded runs included) into the dated
-    weekly directory, and copy it to a stable path the CI artifact step
-    always finds regardless of as_of or outcome."""
+def _render_report(result: live.RunResult, persist_dated_copy: bool = True):
+    """Render the HTML report (degraded runs included) and copy it to a
+    stable path the CI artifact step always finds regardless of as_of
+    or outcome.
+
+    `persist_dated_copy=False` (ALREADY_RUN's true no-op, Phase B2)
+    renders directly to the gitignored `report_latest.html` only,
+    leaving the tracked `live/weekly/<as_of>/report.html` from the run
+    that actually decided this date untouched.
+    """
     history = _load_history()
-    report_path = report.render_weekly_report(result, history=history)
     latest = live.LIVE_DIR / "report_latest.html"
     latest.parent.mkdir(parents=True, exist_ok=True)
+    if not persist_dated_copy:
+        return report.render_weekly_report(
+            result, history=history, out_path=latest
+        )
+    report_path = report.render_weekly_report(result, history=history)
     shutil.copyfile(report_path, latest)
     return report_path
 

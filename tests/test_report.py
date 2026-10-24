@@ -298,6 +298,39 @@ def test_enough_history_renders_chart(tmp_path):
     assert "Current drawdown" in html
 
 
+# --------------------------------------------------------------------- #
+# Context: net-of-cost NAV (external-review Phase B3). The chart must
+# plot and label the net series when present, and fall back to an
+# honestly-labelled gross reading for history rows that predate the fix.
+# --------------------------------------------------------------------- #
+def _history_net(n, status="ok"):
+    dates = pd.bdate_range("2026-01-02", periods=n, freq="W-FRI")
+    rng = pd.Series(range(n))
+    gross = (0.002 + 0.001 * (rng % 3 - 1)).to_numpy()
+    return pd.DataFrame(
+        {
+            "as_of": [d.date().isoformat() for d in dates],
+            "status": [status] * n,
+            "book_return": gross,
+            "book_return_net": gross - 0.0002,
+            "permanent_return": (0.0015 + 0.0008 * (rng % 2)).to_numpy(),
+        }
+    )
+
+
+def test_context_uses_net_and_labels_it_when_available(tmp_path):
+    html = _render(_ok_run(), history=_history_net(10), tmp_path=tmp_path)
+    assert "data:image/png;base64," in html
+    assert "net of 10 bp" in html.lower()
+    assert "gross of costs" not in html.lower()
+
+
+def test_context_falls_back_to_gross_label_for_old_history(tmp_path):
+    html = _render(_ok_run(), history=_history(10), tmp_path=tmp_path)
+    assert "gross of costs" in html.lower()
+    assert "net of 10 bp" not in html.lower()
+
+
 def test_disabled_view_families_are_explained(tmp_path):
     html = _render(_ok_run(), tmp_path=tmp_path)
     # V3/V4/V5 are off in the fixture; their one-line reasons must show.
