@@ -136,17 +136,24 @@ costs"; the gross column is kept in the CSV for anyone who wants it.
 
 **Live record restart takes effect with the first corrected run
 (expected: the Monday 2026-10-26 14:00 UTC catch-up cron, deciding
-2026-10-23), not 2026-10-21 as originally planned.** The local
-ANALYSIS_V4 fixes (Phases 0-3) were not pushed to `origin/master` before
-the Saturday 2026-10-18 and 2026-10-24 crons ran, so both the original
-funding decision (2026-10-09) *and* the following week's continuation
-decision (2026-10-16) executed under the pre-fix double-counted-
-risk-free-rate bug -- same five-asset, 20%-each book both times. Both
-weeks are now archived at `live/archive/pre_v4/` (including the full
-`history.csv` covering both) as the audit trail, not deleted;
-`live/state.json` was removed so the next run funds the book from cash
-under the corrected config, verified by dry run to produce a
-diversified ~21-holding book with no asset above ~6.2%.
+2026-10-23), not 2026-10-21 as originally planned.** Two pre-fix weeks
+ended up on the record, for two different reasons. The original funding
+decision (2026-10-09) was produced by a **manual "Run workflow"
+dispatch on Sunday 2026-10-18 17:35 UTC** (bot commit `aa80a24`) -- the
+project's original launch, run before ANALYSIS_V4.md (dated 2026-10-18)
+had even found the specification bug, let alone before it was fixed
+(`0726ff7`, 2026-10-22); the code was pre-fix simply because the fix
+didn't exist yet. The following week's continuation decision
+(2026-10-16) was produced by the **Saturday 2026-10-24 02:00 UTC
+scheduled cron** (bot commit `04a835d`, completing 06:36 UTC): by then
+the fix existed, but Phases 0-3 were still local-only commits, not yet
+pushed to `origin/master`, so that run executed the old code too --
+same five-asset, 20%-each book both times. Both weeks are now archived
+at `live/archive/pre_v4/` (including the full `history.csv` covering
+both) as the audit trail, not deleted; `live/state.json` was removed
+(`22bea5c`) so the next run funds the book from cash under the
+corrected config, verified by dry run to produce a diversified
+~21-holding book with no asset above ~6.2%.
 
 ## Results
 
