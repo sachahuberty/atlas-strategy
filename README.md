@@ -155,6 +155,26 @@ both) as the audit trail, not deleted; `live/state.json` was removed
 corrected config, verified by dry run to produce a diversified
 ~21-holding book with no asset above ~6.2%.
 
+**Config-change guard vs. warning.** Only one setting is a hard guard:
+`live.run_once` refuses outright (`STATUS_FAILED`, no mutation) to
+trade an initialized book forward if its state's recorded
+`black_litterman.excess_return_prior` is missing or differs from the
+current config -- the exact gap that let a buggy and a corrected week
+both land on this record before the guard existed. Every OTHER config
+change is allowed to trade the existing book forward (blocking every
+edit would be too strict for routine tuning), but is never silent: a
+changed `config_hash` since the book's last decision adds a message to
+that week's result, `diagnostics.json`'s `config_changed`/
+`previous_config_hash`/`config_hash`, a visible warning in the report's
+"What Drove It" section, and an `::warning::` annotation in the Actions
+tab. A strategy change that actually matters (Phase C's planned
+risk-off-target and cash-mode changes, for instance) should still come
+with a deliberate decision, documented here, to either reset the live
+record (archive the current book under `live/archive/` and delete
+`live/state.json`, as this section describes) or deliberately keep
+trading it forward -- this warning is a safety net for noticing an
+unplanned change, not a substitute for that decision.
+
 ## Results
 
 **Start here: the corrected numbers.** ATLAS's results were affected by

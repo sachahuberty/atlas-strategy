@@ -499,6 +499,28 @@ def _decide(
     caller's terminal guard)."""
     tickers = market.returns.columns
     messages: list[str] = []
+    cfg_hash = _config_hash(cfg)
+
+    # Soft config-change flag (ANALYSIS_V4 external-review follow-up,
+    # distinct from `_check_spec_match`'s hard excess_return_prior
+    # guard): any OTHER config change is allowed to trade the existing
+    # book forward -- blocking every edit would be too strict -- but is
+    # surfaced rather than silent. No warning for an uninitialized state
+    # (nothing to compare against) or a state with no stored
+    # config_hash (predates this flag; the hard guard above already
+    # covers the one setting that matters enough to block on).
+    config_changed = False
+    previous_config_hash = None
+    if current_state.get("initialized"):
+        stored_hash = current_state.get("config_hash")
+        if stored_hash is not None and stored_hash != cfg_hash:
+            config_changed = True
+            previous_config_hash = stored_hash
+            messages.append(
+                f"Config changed since last decision ({stored_hash} -> "
+                f"{cfg_hash}): this week trades the existing book "
+                "forward under the new config."
+            )
 
     # 1. Reconcile: drift last week's stored weights forward to as_of.
     performance: dict = {
@@ -638,7 +660,9 @@ def _decide(
             # underlying FRED series actually is.
             "rf_as_of": market.rf_true_last_date.isoformat(),
         },
-        "config_hash": _config_hash(cfg),
+        "config_hash": cfg_hash,
+        "config_changed": config_changed,
+        "previous_config_hash": previous_config_hash,
     }
 
     # 4. Persist (skip entirely on dry_run).

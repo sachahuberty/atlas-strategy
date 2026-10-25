@@ -116,6 +116,13 @@ jobs:
             *)
               echo "::error title=Failed::ATLAS run FAILED (exit ${CODE}). No state committed; see the log and report artifact." ;;
           esac
+          # Soft config-change flag (ANALYSIS_V4 external-review follow-
+          # up), separate from STATUS: a config edit since the book's
+          # last decision is allowed to trade forward, just flagged.
+          CONFIG_CHANGED=$(grep '^ATLAS_CONFIG_CHANGED=' run.log | tail -1 | cut -d= -f2)
+          if [ "$CONFIG_CHANGED" = "true" ]; then
+            echo "::warning title=Config changed::The strategy config changed since this book's last decision; it traded forward under the new config this week. Review the report before next week's run."
+          fi
           # A failed run fails the job; held/ok/already_run pass green
           # (the annotation above is what distinguishes them at a glance).
           if [ "$CODE" = "1" ]; then exit 1; fi

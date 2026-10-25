@@ -390,12 +390,29 @@ def _drivers_section(run) -> str:
     diag = run.diagnostics or {}
     bl = diag.get("black_litterman", {})
     parts = [
+        _config_change_block(diag),
         _regime_block(bl),
         _views_block(bl, diag.get("modules", {})),
         _gate_block(bl),
         _anomaly_block(diag.get("anomaly", {})),
     ]
     return _card("What Drove It", "".join(parts))
+
+
+def _config_change_block(diag) -> str:
+    """Soft config-change warning (ANALYSIS_V4 external-review
+    follow-up): visible, but never blocking -- the hard guard is
+    `live._check_spec_match`'s `excess_return_prior` check, which fails
+    the run outright before any of this renders."""
+    if not diag.get("config_changed"):
+        return ""
+    old = escape(str(diag.get("previous_config_hash", "n/a")))
+    new = escape(str(diag.get("config_hash", "n/a")))
+    return (
+        "<p class='callout warn'>Config changed since last decision "
+        f"(<code>{old}</code> &rarr; <code>{new}</code>): this week "
+        "trades the existing book forward under the new config.</p>"
+    )
 
 
 def _regime_block(bl) -> str:

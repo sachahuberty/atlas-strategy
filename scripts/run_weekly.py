@@ -139,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     # Machine-readable status line for the scheduler (distinguishes
     # already_run from ok, which share exit code 0).
     print(f"ATLAS_STATUS={result.status}")
+    # Second machine-readable line (ANALYSIS_V4 external-review
+    # follow-up): the scheduler annotates this separately from
+    # ATLAS_STATUS, since a config change is a soft, non-blocking
+    # warning on an otherwise-ok run, not a status of its own.
+    config_changed = bool(result.diagnostics.get("config_changed"))
+    print(f"ATLAS_CONFIG_CHANGED={'true' if config_changed else 'false'}")
     return result.exit_code
 
 

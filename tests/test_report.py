@@ -343,3 +343,27 @@ def test_returns_written_path(tmp_path):
     out = tmp_path / "custom.html"
     path = report.render_weekly_report(run, out_path=out)
     assert path == out and out.exists()
+
+
+# --------------------------------------------------------------------- #
+# Config-change warning (ANALYSIS_V4 external-review follow-up): a
+# soft, visible warning in "What Drove It" when diagnostics flags it,
+# absent entirely otherwise.
+# --------------------------------------------------------------------- #
+def test_config_changed_shows_warning(tmp_path):
+    diag = _diagnostics()
+    diag["config_changed"] = True
+    diag["previous_config_hash"] = "old0001"
+    diag["config_hash"] = "new9999"
+    html = _render(_ok_run(diagnostics=diag), tmp_path=tmp_path)
+    assert "Config changed" in html
+    assert "old0001" in html
+    assert "new9999" in html
+
+
+def test_config_unchanged_shows_no_warning(tmp_path):
+    diag = _diagnostics()
+    diag["config_changed"] = False
+    diag["previous_config_hash"] = None
+    html = _render(_ok_run(diagnostics=diag), tmp_path=tmp_path)
+    assert "Config changed" not in html

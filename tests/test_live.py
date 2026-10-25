@@ -153,13 +153,17 @@ def _seed_state(
     weights_as_of,
     last_decision="2000-01-01",
     excess_return_prior=True,
+    config_hash=None,
 ):
     """Seed an initialized state. `excess_return_prior` defaults to
     `True` (matching config.yaml's default) so every existing caller
     automatically carries a MATCHING record and never trips the
     ANALYSIS_V4 external-review spec-match guard; pass `None` to omit
     it (a pre-guard state) or `False` to seed a genuine mismatch, for
-    tests that specifically exercise that guard."""
+    tests that specifically exercise that guard. `config_hash` is
+    omitted by default (no stored hash -> no config-changed warning,
+    the documented no-op case); pass an explicit value (matching or
+    not) to exercise the soft config-change flag."""
     st = state_mod.empty_state()
     st["initialized"] = True
     st["weights"] = {t: float(v) for t, v in weights.items()}
@@ -168,6 +172,8 @@ def _seed_state(
     st["run_count"] = 1
     if excess_return_prior is not None:
         st["excess_return_prior"] = excess_return_prior
+    if config_hash is not None:
+        st["config_hash"] = config_hash
     state_mod.save_state(st, path)
     return path
 
@@ -952,3 +958,86 @@ def test_funding_run_persists_spec_for_the_next_run(tmp_path, monkeypatch):
 
     saved = state_mod.load_state(sp)
     assert saved["excess_return_prior"] is True
+
+
+# --------------------------------------------------------------------- #
+# Config-change warning (ANALYSIS_V4 external-review follow-up): any
+# config change OTHER than excess_return_prior is allowed to trade an
+# existing book forward (not a hard guard), but must be surfaced, never
+# silent.
+# --------------------------------------------------------------------- #
+def test_config_changed_warns_but_still_trades(tmp_path, monkeypatch):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    cfg = data.load_config()
+    stale_hash = "deadbeefcafe0"  # deliberately not the real hash
+    sp = _seed_state(
+        tmp_path / "state.json", {"CA": 1.0}, as_of, config_hash=stale_hash
+    )
+
+    res = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    assert res.status == live.STATUS_OK  # trades, not blocked
+    assert res.one_way_executed > 0
+
+    diag = res.diagnostics
+    assert diag["config_changed"] is True
+    assert diag["previous_config_hash"] == stale_hash
+    assert diag["config_hash"] != stale_hash
+    assert any(
+        "Config changed" in m and stale_hash in m for m in res.messages
+    )
+
+    saved = state_mod.load_state(sp)
+    assert saved["config_hash"] == diag["config_hash"]
+
+
+def test_config_unchanged_no_warning(tmp_path, monkeypatch):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    cfg = data.load_config()
+    matching_hash = live._config_hash(cfg)
+    sp = _seed_state(
+        tmp_path / "state.json",
+        {"CA": 1.0},
+        as_of,
+        config_hash=matching_hash,
+    )
+
+    res = live.run_once(as_of=as_of, cfg=cfg, state_path=sp)
+    assert res.status == live.STATUS_OK
+    assert res.diagnostics["config_changed"] is False
+    assert res.diagnostics["previous_config_hash"] is None
+    assert not any("Config changed" in m for m in res.messages)
+
+
+def test_uninitialized_state_no_config_change_warning(tmp_path, monkeypatch):
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = tmp_path / "state.json"  # absent -> uninitialized, funding path
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+    assert res.diagnostics["is_funding"] is True
+    assert res.diagnostics["config_changed"] is False
+    assert not any("Config changed" in m for m in res.messages)
+
+
+def test_initialized_state_with_no_stored_hash_no_warning(
+    tmp_path, monkeypatch
+):
+    # No stored config_hash at all (predates this flag) -> no warning,
+    # same as an uninitialized state; the hard excess_return_prior
+    # guard is unaffected (seeded matching here) and still applies.
+    market = _toy_market()
+    as_of = max(backtest.week_end_dates(market.returns.index))
+    _mock_fixed_decision(monkeypatch, market, _toy_target())
+
+    sp = _seed_state(tmp_path / "state.json", {"CA": 1.0}, as_of)
+    res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
+    assert res.status == live.STATUS_OK
+    assert res.diagnostics["config_changed"] is False
