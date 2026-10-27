@@ -39,6 +39,50 @@ REGIME_TARGET_BUCKETS = {
     "neutral": [],
 }
 
+# Reselection task (ANALYSIS_V4 external-review Phase C): risk_off's
+# commodity-bucket target lumps in USO/DBC/SLV alongside GLD, and only
+# gold is plausibly defensive (oil went negative in April 2020).
+# `black_litterman.regime_targets.risk_off` selects among these three
+# BUCKET-LEVEL target lists; "legacy" (the default -- absent config key
+# included) is byte-identical to the original hardcoded
+# `REGIME_TARGET_BUCKETS["risk_off"]` above. "bonds_gold" additionally
+# needs an ASSET-LEVEL (not bucket-averaged) row for gold specifically,
+# handled separately in `_risk_off_targets` below via
+# `black_litterman.regime_targets.risk_off_assets` -- no ticker is
+# hardcoded here; the caller's config supplies the asset list.
+_RISK_OFF_BUCKET_TARGETS = {
+    "legacy": ["fixed_income", "commodity"],
+    "bonds_cash": ["fixed_income", "cash"],
+    "bonds_gold": ["fixed_income"],
+}
+
+
+def _risk_off_targets(
+    class_bucket: pd.Series, tickers: pd.Index, cfg: dict
+) -> list[tuple[pd.Index, str]]:
+    """(members, label_suffix) pairs for the risk_off posture's target,
+    bucket-level entries plus `bonds_gold`'s extra asset-level row.
+    Unknown `regime_targets.risk_off` values fall back to "legacy"."""
+    regime_targets = cfg["black_litterman"].get("regime_targets", {})
+    variant = regime_targets.get("risk_off", "legacy")
+    bucket_names = _RISK_OFF_BUCKET_TARGETS.get(
+        variant, _RISK_OFF_BUCKET_TARGETS["legacy"]
+    )
+
+    targets = []
+    for bucket in bucket_names:
+        members = class_bucket[class_bucket == bucket].index
+        if len(members) > 0:
+            targets.append((members, bucket))
+
+    if variant == "bonds_gold":
+        asset_list = regime_targets.get("risk_off_assets", [])
+        members = pd.Index([t for t in asset_list if t in tickers])
+        if len(members) > 0:
+            targets.append((members, "_".join(members)))
+
+    return targets
+
 
 @dataclass
 class ViewSet:
@@ -58,25 +102,34 @@ def regime_view(
     posture: str, class_bucket: pd.Series, prior: pd.Series, cfg: dict
 ) -> ViewSet:
     """V1 (S4/S7): the HMM posture tilts a class bucket's average
-    return. risk_on -> equity; risk_off -> fixed_income + commodity;
-    neutral -> no view (an empty ViewSet)."""
+    return. risk_on -> equity; risk_off -> a config-selectable target
+    (default: fixed_income + commodity, byte-identical to the original
+    hardcoded behavior -- see `_risk_off_targets`); neutral -> no view
+    (an empty ViewSet)."""
     view_set = ViewSet()
     if not cfg["modules"]["regime_view"]:
         return view_set
 
     bcfg = cfg["black_litterman"]
     tickers = prior.index
-    for bucket in REGIME_TARGET_BUCKETS.get(posture, []):
-        members = class_bucket[class_bucket == bucket].index
+    if posture == "risk_off":
+        targets = _risk_off_targets(class_bucket, tickers, cfg)
+    else:
+        targets = [
+            (class_bucket[class_bucket == bucket].index, bucket)
+            for bucket in REGIME_TARGET_BUCKETS.get(posture, [])
+        ]
+
+    for members, label_suffix in targets:
         if len(members) == 0:
             continue
         p_row = pd.Series(0.0, index=tickers)
         p_row[members] = 1.0 / len(members)
-        bucket_prior = float(p_row @ prior)
+        target_prior = float(p_row @ prior)
         view_set.p_rows.append(p_row.to_numpy())
-        view_set.q_rows.append(bucket_prior + bcfg["regime_view_magnitude"])
+        view_set.q_rows.append(target_prior + bcfg["regime_view_magnitude"])
         view_set.confidence.append(bcfg["view_confidence"]["regime"])
-        view_set.labels.append(f"V1_regime_{bucket}")
+        view_set.labels.append(f"V1_regime_{label_suffix}")
     return view_set
 
 

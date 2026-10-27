@@ -62,6 +62,82 @@ def test_regime_view_risk_off_targets_fixed_income_and_commodity():
         assert q == pytest.approx(PRIOR[ticker] + magnitude)
 
 
+def test_regime_view_risk_off_default_is_byte_identical_to_legacy():
+    # Reselection task Phase C: the default (no regime_targets key at
+    # all, exactly today's config.yaml) must reproduce the original
+    # hardcoded fixed_income + commodity behavior exactly.
+    view_set = views.regime_view("risk_off", CLASS_BUCKET, PRIOR, CFG)
+    assert set(view_set.labels) == {
+        "V1_regime_fixed_income", "V1_regime_commodity",
+    }
+    magnitude = CFG["black_litterman"]["regime_view_magnitude"]
+    for label, q, p_row in zip(
+        view_set.labels, view_set.q_rows, view_set.p_rows
+    ):
+        bucket = label.replace("V1_regime_", "")
+        members = CLASS_BUCKET[CLASS_BUCKET == bucket].index
+        expected_prior = PRIOR[members].mean()
+        assert q == pytest.approx(expected_prior + magnitude)
+        expected_p = pd.Series(0.0, index=CLASS_BUCKET.index)
+        expected_p[members] = 1.0 / len(members)
+        np.testing.assert_allclose(p_row, expected_p.to_numpy())
+
+
+def test_regime_view_risk_off_bonds_cash_targets_fixed_income_and_cash():
+    bucket = pd.Series(
+        {"SPY": "equity", "QQQ": "equity", "AGG": "fixed_income", "GLD": "cash"}
+    )
+    cfg = {
+        **CFG,
+        "black_litterman": {
+            **CFG["black_litterman"],
+            "regime_targets": {"risk_off": "bonds_cash"},
+        },
+    }
+    view_set = views.regime_view("risk_off", bucket, PRIOR, cfg)
+    assert set(view_set.labels) == {
+        "V1_regime_fixed_income", "V1_regime_cash",
+    }
+
+
+def test_regime_view_risk_off_bonds_gold_targets_fixed_income_and_gold_only():
+    cfg = {
+        **CFG,
+        "black_litterman": {
+            **CFG["black_litterman"],
+            "regime_targets": {
+                "risk_off": "bonds_gold",
+                "risk_off_assets": ["GLD"],
+            },
+        },
+    }
+    view_set = views.regime_view("risk_off", CLASS_BUCKET, PRIOR, cfg)
+    assert set(view_set.labels) == {"V1_regime_fixed_income", "V1_regime_GLD"}
+    magnitude = CFG["black_litterman"]["regime_view_magnitude"]
+    gold_idx = view_set.labels.index("V1_regime_GLD")
+    assert view_set.q_rows[gold_idx] == pytest.approx(PRIOR["GLD"] + magnitude)
+    expected_p = pd.Series(0.0, index=CLASS_BUCKET.index)
+    expected_p["GLD"] = 1.0
+    np.testing.assert_allclose(view_set.p_rows[gold_idx], expected_p.to_numpy())
+    # Asset-level: the commodity BUCKET average must NOT appear -- only
+    # the single named ticker, unlike "legacy"'s bucket-wide average.
+    assert "V1_regime_commodity" not in view_set.labels
+
+
+def test_regime_view_risk_off_unknown_variant_falls_back_to_legacy():
+    cfg = {
+        **CFG,
+        "black_litterman": {
+            **CFG["black_litterman"],
+            "regime_targets": {"risk_off": "not_a_real_variant"},
+        },
+    }
+    view_set = views.regime_view("risk_off", CLASS_BUCKET, PRIOR, cfg)
+    assert set(view_set.labels) == {
+        "V1_regime_fixed_income", "V1_regime_commodity",
+    }
+
+
 def test_regime_view_neutral_is_empty():
     view_set = views.regime_view("neutral", CLASS_BUCKET, PRIOR, CFG)
     assert len(view_set) == 0
