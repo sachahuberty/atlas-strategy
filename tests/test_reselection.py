@@ -12,6 +12,7 @@ fit calls.
 """
 
 import copy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -312,3 +313,51 @@ def test_build_shared_caches_resumes_from_checkpoint(tmp_path):
     # The first 3 dates' cached entries are untouched by the resume.
     for d in dates[:3]:
         pd.testing.assert_series_equal(full[d]["prior"], partial[d]["prior"])
+
+
+# --------------------------------------------------------------------- #
+# save_checkpoint's OneDrive-lock retry (this project lives in a
+# OneDrive-synced folder, CLAUDE.md's own documented environment
+# caveat; a checkpoint saved after every decision date is exactly the
+# write pattern that can collide with a transient sync lock).
+# --------------------------------------------------------------------- #
+def test_save_checkpoint_retries_through_transient_permission_error(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "cache.pkl"
+    calls = {"n": 0}
+    real_replace = Path.replace
+
+    def flaky_replace(self, target):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError("simulated OneDrive lock")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    monkeypatch.setattr(reselection.time, "sleep", lambda _s: None)
+
+    reselection.save_checkpoint(
+        {"a": 1}, path, retries=5, retry_delay_seconds=0.0
+    )
+    assert calls["n"] == 3
+    assert reselection.load_checkpoint(path) == {"a": 1}
+
+
+def test_save_checkpoint_raises_after_exhausting_retries(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "cache.pkl"
+
+    def always_locked(self, target):
+        raise PermissionError("simulated OneDrive lock")
+
+    monkeypatch.setattr(Path, "replace", always_locked)
+    monkeypatch.setattr(reselection.time, "sleep", lambda _s: None)
+
+    with pytest.raises(PermissionError):
+        reselection.save_checkpoint(
+            {"a": 1}, path, retries=3, retry_delay_seconds=0.0
+        )
+    # No orphan .tmp left behind to confuse the next run's resume scan.
+    assert not path.with_suffix(path.suffix + ".tmp").exists()

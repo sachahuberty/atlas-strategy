@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import copy
 import pickle
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -363,13 +364,37 @@ def run_turnover_variant(
     return backtest.run(lookup_strategy, is_returns, cfg)
 
 
-def save_checkpoint(obj, path: str | Path) -> None:
+def save_checkpoint(
+    obj, path: str | Path, retries: int = 5, retry_delay_seconds: float = 1.0
+) -> None:
+    """Atomic write-then-replace, like `state.save_state` -- but this
+    project lives in a OneDrive-synced folder (CLAUDE.md's own
+    environment note: "if git behaves oddly, suspect OneDrive sync"),
+    and a checkpoint saved after every one of hundreds of decision
+    dates is exactly the write pattern that collides with OneDrive
+    transiently locking a file mid-sync. Retries the final rename a
+    few times with a short delay before giving up, rather than losing
+    an otherwise-complete checkpoint to a one-off `PermissionError`.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "wb") as f:
         pickle.dump(obj, f)
-    tmp.replace(path)
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError as exc:  # noqa: BLE001 -- OneDrive lock
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(retry_delay_seconds)
+    # Exhausted every retry: leave no orphan temp file to confuse the
+    # next run's directory scan or resume (state.save_state's own
+    # convention for the same failure mode).
+    tmp.unlink(missing_ok=True)
+    raise last_exc
 
 
 def load_checkpoint(path: str | Path):
