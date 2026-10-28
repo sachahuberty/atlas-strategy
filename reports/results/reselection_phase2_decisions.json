@@ -1,0 +1,92 @@
+{
+  "V3": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.16687208539415443,
+    "beats_on_stability": true,
+    "fold_win_count": 6,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate beats current on stability_score but does not win a strict majority of folds (6/12)"
+  },
+  "V5": {
+    "adopt_candidate": true,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.18351193717102865,
+    "beats_on_stability": true,
+    "fold_win_count": 7,
+    "n_folds": 12,
+    "wins_strict_majority": true,
+    "reason": "candidate adopted: beats current on stability_score (-0.1835 > -0.3327) and wins a strict majority of folds (7/12)"
+  },
+  "risk_off_bonds_cash": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.33344770230070353,
+    "beats_on_stability": false,
+    "fold_win_count": 3,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate does not beat current on stability_score (-0.3334 <= -0.3327)"
+  },
+  "risk_off_bonds_gold": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.3331596341768528,
+    "beats_on_stability": false,
+    "fold_win_count": 4,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate does not beat current on stability_score (-0.3332 <= -0.3327)"
+  },
+  "gate_A_1": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.315635276967433,
+    "beats_on_stability": true,
+    "fold_win_count": 3,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate beats current on stability_score but does not win a strict majority of folds (3/12)"
+  },
+  "gate_A_3": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.2634605940053082,
+    "beats_on_stability": true,
+    "fold_win_count": 6,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate beats current on stability_score but does not win a strict majority of folds (6/12)"
+  },
+  "gate_A_5": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.40085323079726887,
+    "beats_on_stability": false,
+    "fold_win_count": 6,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate does not beat current on stability_score (-0.4009 <= -0.3327)"
+  },
+  "turnover_1pct_0.5pct": {
+    "adopt_candidate": true,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.3230471711117271,
+    "beats_on_stability": true,
+    "fold_win_count": 8,
+    "n_folds": 12,
+    "wins_strict_majority": true,
+    "reason": "candidate adopted: beats current on stability_score (-0.3230 > -0.3327) and wins a strict majority of folds (8/12)"
+  },
+  "turnover_4pct_0.5pct": {
+    "adopt_candidate": false,
+    "current_stability": -0.3326742819888283,
+    "candidate_stability": -0.3427299767794192,
+    "beats_on_stability": false,
+    "fold_win_count": 4,
+    "n_folds": 12,
+    "wins_strict_majority": false,
+    "reason": "current kept: candidate does not beat current on stability_score (-0.3427 <= -0.3327)"
+  }
+}
