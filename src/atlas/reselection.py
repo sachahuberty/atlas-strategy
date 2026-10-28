@@ -36,6 +36,7 @@ Public API:
         market_ticker, rf_series, meanrev_eligible, anomaly_cache) -> dict
     compute_variant_entry(shared_entry, class_bucket, variant_cfg_dict,
         tickers) -> dict
+    with_delta(shared_entry, class_bucket, delta) -> dict  # Phase 3 only
     gate_select(variant_entry, bcfg, risk_aversion) -> (str, pd.Series)
     build_shared_caches(dates, window_fn, ..., checkpoint_path=None) -> dict
     build_variant_caches(shared_caches, class_bucket, base_cfg, variant,
@@ -244,6 +245,25 @@ def compute_shared_entry(
         "anomaly_flagged": anomaly_flagged,
         "tickers": tickers,
     }
+
+
+def with_delta(
+    shared_entry: dict, class_bucket: pd.Series, delta: float
+) -> dict:
+    """A copy of `shared_entry` with `prior` recomputed at a different
+    `black_litterman.delta` (Phase 3 sensitivity: delta only feeds
+    `allocation.equilibrium_returns(market_weights, cov, delta)` --
+    cheap, pure linear algebra -- so this avoids re-running any of the
+    expensive parts of `compute_shared_entry` (HMM, ADF, anomaly) just
+    to vary it. `cov` and every other shared quantity are reused
+    unchanged; `delta` itself is recorded for provenance."""
+    market_weights = allocation.permanent(class_bucket)
+    cov = shared_entry["cov"]
+    tickers = shared_entry["tickers"]
+    prior = allocation.equilibrium_returns(
+        market_weights.reindex(tickers).fillna(0.0), cov, delta
+    )
+    return {**shared_entry, "prior": prior, "delta": delta}
 
 
 def compute_variant_entry(

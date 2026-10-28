@@ -153,6 +153,56 @@ def test_run_turnover_variant_refuses_oos_touching_returns():
 
 
 # --------------------------------------------------------------------- #
+# with_delta (Phase 3 sensitivity): recomputes `prior` cheaply, without
+# re-running any of compute_shared_entry's expensive parts.
+# --------------------------------------------------------------------- #
+def test_with_delta_reproduces_prior_unchanged_at_the_same_delta():
+    cfg = _small_cfg()
+    returns, class_bucket, rf_series = _market()
+    is_returns = returns.loc[:"2021-12-31"]
+    as_of = max(backtest.week_end_dates(is_returns.index))
+    window = is_returns.loc[:as_of]
+
+    shared = reselection.compute_shared_entry(
+        as_of, window, class_bucket, cfg, _posture_cfg(), "EQ1",
+        rf_series, None, {"result": None, "fitted_at": None},
+    )
+    same_delta = reselection.with_delta(
+        shared, class_bucket, shared["delta"]
+    )
+    pd.testing.assert_series_equal(same_delta["prior"], shared["prior"])
+
+
+def test_with_delta_matches_manual_equilibrium_returns():
+    cfg = _small_cfg()
+    returns, class_bucket, rf_series = _market()
+    is_returns = returns.loc[:"2021-12-31"]
+    as_of = max(backtest.week_end_dates(is_returns.index))
+    window = is_returns.loc[:as_of]
+
+    shared = reselection.compute_shared_entry(
+        as_of, window, class_bucket, cfg, _posture_cfg(), "EQ1",
+        rf_series, None, {"result": None, "fitted_at": None},
+    )
+    new_delta = 4.0
+    recomputed = reselection.with_delta(shared, class_bucket, new_delta)
+
+    from atlas import allocation
+
+    market_weights = allocation.permanent(class_bucket)
+    expected = allocation.equilibrium_returns(
+        market_weights.reindex(shared["tickers"]).fillna(0.0),
+        shared["cov"],
+        new_delta,
+    )
+    pd.testing.assert_series_equal(recomputed["prior"], expected)
+    # Everything else (cov, anomaly flag, raw view series) is reused
+    # unchanged -- only prior/delta differ.
+    pd.testing.assert_frame_equal(recomputed["cov"], shared["cov"])
+    assert recomputed["delta"] == new_delta
+
+
+# --------------------------------------------------------------------- #
 # Equivalence: cached gate re-selection matches
 # strategy._select_gated_candidate directly.
 # --------------------------------------------------------------------- #
