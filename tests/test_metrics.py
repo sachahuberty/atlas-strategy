@@ -3,16 +3,20 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import norm
 
 from atlas.metrics import (
     ann_return,
     cagr,
     calmar,
+    deflated_sharpe_ratio,
     hit_rate,
     max_drawdown,
+    newey_west_mean_test,
     portfolio_return,
     portfolio_vol,
     sharpe,
+    sharpe_standard_error,
     sortino,
     turnover,
     utility,
@@ -112,3 +116,125 @@ def test_utility_ordering_across_risk_aversion():
 def test_utility_known_value():
     result = utility(exp_ret=0.10, vol=0.20, risk_aversion=5)
     assert result == pytest.approx(0.10 - 0.5 * 5 * 0.20 ** 2)
+
+
+# --------------------------------------------------------------------- #
+# sharpe_standard_error (reselection task Phase 4): deliberately the
+# sqrt((1+SR^2/2)/years) formula, not README's simpler 0.5/sqrt(years).
+# --------------------------------------------------------------------- #
+def test_sharpe_standard_error_known_value():
+    sr, years = 0.6, 4.5
+    expected = np.sqrt((1 + sr ** 2 / 2) / years)
+    assert sharpe_standard_error(sr, years) == pytest.approx(expected)
+
+
+def test_sharpe_standard_error_grows_with_sharpe_magnitude():
+    # Holding years fixed, a larger |SR| means a larger SE under this
+    # formula (unlike the simpler 0.5/sqrt(years) convention, which is
+    # flat in SR).
+    se_low = sharpe_standard_error(0.1, 5.0)
+    se_high = sharpe_standard_error(1.5, 5.0)
+    assert se_high > se_low
+
+
+def test_sharpe_standard_error_shrinks_with_more_years():
+    se_short = sharpe_standard_error(0.6, 2.0)
+    se_long = sharpe_standard_error(0.6, 10.0)
+    assert se_long < se_short
+
+
+# --------------------------------------------------------------------- #
+# newey_west_mean_test
+# --------------------------------------------------------------------- #
+def test_newey_west_mean_test_zero_mean_series_not_significant():
+    # A series mirrored around zero (x, -x) has an EXACTLY zero sample
+    # mean by construction, not merely "close to zero by luck of the
+    # seed" -- avoids a flaky draw that happens to reject a true null
+    # at the ~5% rate any valid test should.
+    rng = np.random.default_rng(1)
+    x = rng.normal(0.0, 0.01, 150)
+    series = pd.Series(np.concatenate([x, -x]))
+    result = newey_west_mean_test(series)
+    assert result["mean"] == pytest.approx(0.0, abs=1e-12)
+    assert result["pvalue"] > 0.9  # essentially certain not to reject
+    assert result["n"] == 300
+
+
+def test_newey_west_mean_test_detects_a_real_mean_shift():
+    rng = np.random.default_rng(2)
+    series = pd.Series(rng.normal(0.01, 0.005, 300))  # clear positive drift
+    result = newey_west_mean_test(series)
+    assert result["mean"] == pytest.approx(series.mean())
+    assert result["pvalue"] < 0.01
+    assert result["tstat"] > 0
+
+
+def test_newey_west_mean_test_drops_nan():
+    series = pd.Series([0.01, np.nan, 0.01, 0.01, np.nan, 0.01] * 20)
+    result = newey_west_mean_test(series)
+    assert result["n"] == 80  # 120 - 40 NaNs
+
+
+def test_newey_west_mean_test_se_larger_than_iid_under_autocorrelation():
+    # A strongly autocorrelated series: the HAC SE must exceed the
+    # naive i.i.d. SE (std/sqrt(n)), since HAC accounts for the extra
+    # uncertainty autocorrelation introduces.
+    n = 300
+    rng = np.random.default_rng(3)
+    noise = rng.normal(0.0, 0.01, n)
+    series = pd.Series(noise).rolling(5).mean().dropna() + 0.002
+    result = newey_west_mean_test(series, maxlags=10)
+    iid_se = series.std(ddof=1) / np.sqrt(len(series))
+    assert result["se"] > iid_se
+
+
+# --------------------------------------------------------------------- #
+# deflated_sharpe_ratio
+# --------------------------------------------------------------------- #
+def test_deflated_sharpe_ratio_without_trial_correction_is_probabilistic_sr():
+    # sharpe_std_across_trials omitted -> SR_0 = 0, so this reduces to
+    # the ordinary Probabilistic Sharpe Ratio (normal returns: skew=0,
+    # kurtosis=3 collapses the variance term to 1/(n_obs-1)).
+    sr, n_obs = 0.8, 500
+    dsr = deflated_sharpe_ratio(sr, n_trials=1, n_obs=n_obs)
+    sigma_sr = np.sqrt(1.0 / (n_obs - 1))
+    expected = norm.cdf(sr / sigma_sr)
+    assert dsr == pytest.approx(expected)
+
+
+def test_deflated_sharpe_ratio_decreases_with_more_trials():
+    sr, n_obs = 0.8, 500
+    dsr_few = deflated_sharpe_ratio(
+        sr, n_trials=5, n_obs=n_obs, sharpe_std_across_trials=0.2
+    )
+    dsr_many = deflated_sharpe_ratio(
+        sr, n_trials=200, n_obs=n_obs, sharpe_std_across_trials=0.2
+    )
+    assert dsr_many < dsr_few
+
+
+def test_deflated_sharpe_ratio_is_a_probability():
+    for n_trials in (1, 10, 144, 171):
+        dsr = deflated_sharpe_ratio(
+            0.5, n_trials=n_trials, n_obs=300,
+            sharpe_std_across_trials=0.15,
+        )
+        assert 0.0 <= dsr <= 1.0
+
+
+def test_deflated_sharpe_ratio_higher_sharpe_gives_higher_dsr():
+    low = deflated_sharpe_ratio(
+        0.2, n_trials=144, n_obs=500, sharpe_std_across_trials=0.2
+    )
+    high = deflated_sharpe_ratio(
+        0.9, n_trials=144, n_obs=500, sharpe_std_across_trials=0.2
+    )
+    assert high > low
+
+
+def test_deflated_sharpe_ratio_degenerate_zero_variance():
+    # sigma_sr_hat collapses to ~0 when n_obs is at its floor; must not
+    # raise a ZeroDivisionError-equivalent, and must return a boundary
+    # probability consistent with sharpe_ratio vs sr_0.
+    result = deflated_sharpe_ratio(0.1, n_trials=1, n_obs=1)
+    assert result in (0.0, 1.0)
