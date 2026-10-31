@@ -1,0 +1,108 @@
+<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>ATLAS Weekly Signal Report</title><style>
+:root{
+  --ink:#1c2024; --muted:#6b727c; --line:#e3e6ea; --paper:#ffffff;
+  --accent:#2f4b7c; --pos:#1a7f4b; --neg:#b3261e; --cap:#fff6e6;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#f4f5f7;color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,
+  Arial,sans-serif;font-size:14px;line-height:1.5;}
+main{max-width:900px;margin:0 auto;padding:32px 28px 64px;
+  background:var(--paper);}
+header{border-bottom:2px solid var(--ink);padding-bottom:16px;
+  margin-bottom:8px;}
+.titlerow{display:flex;justify-content:space-between;align-items:flex-start;
+  gap:16px;flex-wrap:wrap;}
+.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);}
+h1{font-size:26px;margin:2px 0 0;font-weight:600;letter-spacing:-.01em;}
+.asof{text-align:right;}
+.asof-date{font-variant-numeric:tabular-nums;font-weight:600;font-size:15px;}
+.run-date{font-variant-numeric:tabular-nums;font-size:12px;color:#5b6470;
+  margin-top:2px;}
+.badges{margin-top:6px;display:flex;gap:6px;justify-content:flex-end;
+  flex-wrap:wrap;}
+.badge{display:inline-block;padding:3px 9px;border-radius:3px;font-size:11px;
+  font-weight:600;letter-spacing:.06em;color:#fff;background:var(--c);}
+.disclaimer{margin-top:14px;font-size:11.5px;letter-spacing:.03em;
+  color:var(--muted);border:1px solid var(--line);border-left:3px solid
+  var(--accent);padding:8px 12px;background:#fafbfc;}
+.messages{margin:10px 0 0;padding-left:18px;color:var(--muted);
+  font-size:12.5px;}
+.card{padding:22px 0;border-bottom:1px solid var(--line);}
+.card:last-of-type{border-bottom:none;}
+h2{font-size:16px;margin:0 0 12px;font-weight:600;letter-spacing:.01em;}
+h3{font-size:13px;margin:18px 0 8px;font-weight:600;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.05em;}
+p{margin:8px 0;}
+.muted{color:var(--muted);}
+.note{color:var(--muted);font-size:12px;margin:6px 0;}
+table{width:100%;border-collapse:collapse;margin:8px 0;}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);
+  vertical-align:top;}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);font-weight:600;border-bottom:1px solid var(--ink);}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;
+  font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  white-space:nowrap;}
+td.tk{font-weight:600;font-family:"SFMono-Regular",Consolas,monospace;}
+td.nm{color:var(--muted);}
+tr.capped{background:var(--cap);}
+.cap-flag,.pick{font-size:9.5px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:#8a6d1f;background:#f6e6bf;padding:1px 4px;
+  border-radius:2px;margin-left:4px;}
+.pick{color:#155e3a;background:#d8efe1;}
+tr.chosen{background:#f2f8f4;font-weight:600;}
+td.pos{color:var(--pos);}
+td.neg{color:var(--neg);}
+.bucket,.turn,.ctx{max-width:360px;}
+.callout{border-left:3px solid var(--accent);padding:8px 12px;
+  background:#fafbfc;font-size:13px;}
+.callout.warn{border-left-color:#b8860b;background:#fdf9ef;}
+.disabled{margin:4px 0 0;padding-left:18px;color:var(--muted);font-size:12px;}
+.chart{margin:8px 0;}
+.chart img{max-width:100%;height:auto;display:block;}
+footer{margin-top:8px;padding-top:14px;border-top:1px solid var(--line);
+  color:var(--muted);font-size:11px;}
+.ftrow{display:flex;gap:18px;flex-wrap:wrap;font-variant-numeric:tabular-nums;}
+@media print{
+  body{background:#fff;font-size:11.5px;}
+  main{max-width:none;padding:0;}
+  .card{break-inside:avoid;}
+  table,.callout,.chart{break-inside:avoid;}
+}
+</style></head><body><main>
+    <header>
+      <div class="titlerow">
+        <div>
+          <div class="eyebrow">ATLAS Systematic Allocation</div>
+          <h1>Weekly Signal Report</h1>
+        </div>
+        <div class="asof">
+          <div class="asof-date">Decision: 2026-10-30</div>
+          <div class="run-date">Run: 2026-10-31 07:37 UTC</div>
+          <div class="badges">
+            <span class="badge" style="--c:#1a7f4b">TRADED</span>
+            <span class="badge" style="--c:#1a7f4b">Risk-on</span>
+          </div>
+        </div>
+      </div>
+      <div class="disclaimer">
+        SIGNAL REPORT - NOT A TRADE INSTRUCTION. Model-driven weekly
+        target allocation for review. No discretionary overrides.
+      </div>
+      
+    </header>
+    <section class='card'><h2>The Book</h2><table class='book'><thead><tr><th>Ticker</th><th>Name</th><th>Bucket</th><th class='num'>Target</th><th class='num'>Current</th><th class='num'>Delta</th></tr></thead><tbody><tr><td class='tk'>QQQ</td><td class='nm'>Invesco QQQ Trust</td><td>Equity</td><td class='num'>6.2%</td><td class='num'>6.1%</td><td class='num'>+0.1%</td></tr><tr><td class='tk'>IWM</td><td class='nm'>iShares Russell 2000</td><td>Equity</td><td class='num'>6.0%</td><td class='num'>6.1%</td><td class='num'>-0.1%</td></tr><tr><td class='tk'>VEA</td><td class='nm'>Vanguard FTSE Developed Mkts</td><td>Equity</td><td class='num'>5.9%</td><td class='num'>6.0%</td><td class='num'>-0.1%</td></tr><tr><td class='tk'>VWO</td><td class='nm'>Vanguard FTSE Emerging Mkts</td><td>Equity</td><td class='num'>5.9%</td><td class='num'>5.8%</td><td class='num'>+0.1%</td></tr><tr><td class='tk'>EFA</td><td class='nm'>iShares MSCI EAFE</td><td>Equity</td><td class='num'>5.8%</td><td class='num'>5.9%</td><td class='num'>-0.1%</td></tr><tr><td class='tk'>USO</td><td class='nm'>United States Oil Fund</td><td>Commodity</td><td class='num'>5.8%</td><td class='num'>5.8%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>SLV</td><td class='nm'>iShares Silver Trust</td><td>Commodity</td><td class='num'>5.7%</td><td class='num'>5.3%</td><td class='num'>+0.4%</td></tr><tr><td class='tk'>ACWI</td><td class='nm'>iShares MSCI ACWI</td><td>Equity</td><td class='num'>5.7%</td><td class='num'>5.7%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>GLD</td><td class='nm'>SPDR Gold Shares</td><td>Commodity</td><td class='num'>5.7%</td><td class='num'>5.6%</td><td class='num'>+0.1%</td></tr><tr><td class='tk'>DBC</td><td class='nm'>Invesco DB Commodity</td><td>Commodity</td><td class='num'>5.7%</td><td class='num'>5.6%</td><td class='num'>+0.0%</td></tr><tr><td class='tk'>VTI</td><td class='nm'>Vanguard Total Stock Market</td><td>Equity</td><td class='num'>5.6%</td><td class='num'>5.6%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>SPY</td><td class='nm'>SPDR S&amp;P 500</td><td>Equity</td><td class='num'>5.6%</td><td class='num'>5.6%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>BIL</td><td class='nm'>SPDR 1-3 Month T-Bill</td><td>Cash</td><td class='num'>4.5%</td><td class='num'>4.5%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>SHY</td><td class='nm'>iShares 1-3Y Treasury</td><td>Fixed income</td><td class='num'>4.0%</td><td class='num'>4.0%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>HYG</td><td class='nm'>iShares iBoxx HY Corp Bond</td><td>Fixed income</td><td class='num'>3.9%</td><td class='num'>3.9%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>BSV</td><td class='nm'>Vanguard Short-Term Bond</td><td>Fixed income</td><td class='num'>3.8%</td><td class='num'>3.8%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>TIP</td><td class='nm'>iShares TIPS Bond</td><td>Fixed income</td><td class='num'>3.3%</td><td class='num'>3.4%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>AGG</td><td class='nm'>iShares Core US Aggregate Bond</td><td>Fixed income</td><td class='num'>3.2%</td><td class='num'>3.2%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>LQD</td><td class='nm'>iShares iBoxx IG Corp Bond</td><td>Fixed income</td><td class='num'>3.0%</td><td class='num'>3.0%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>IEF</td><td class='nm'>iShares 7-10Y Treasury</td><td>Fixed income</td><td class='num'>2.8%</td><td class='num'>2.9%</td><td class='num'>-0.0%</td></tr><tr><td class='tk'>TLT</td><td class='nm'>iShares 20+Y Treasury</td><td>Fixed income</td><td class='num'>2.2%</td><td class='num'>2.2%</td><td class='num'>-0.0%</td></tr></tbody></table><p class='note'>Positions marked <b>cap</b> sit at the 20% per-asset ceiling, which binds most weeks.</p><h3>By asset class</h3><table class='bucket'><tbody><tr><td>Equity</td><td class='num'>46.6%</td></tr><tr><td>Fixed income</td><td class='num'>26.1%</td></tr><tr><td>Commodity</td><td class='num'>22.8%</td></tr><tr><td>Cash</td><td class='num'>4.5%</td></tr><tr><td>Real estate</td><td class='num'>0.0%</td></tr></tbody></table></section><section class='card'><h2>The Trade</h2><table class='trade'><thead><tr><th>Ticker</th><th>Name</th><th class='num'>Change</th></tr></thead><tbody><tr><td class='tk'>IWM</td><td class='nm'>iShares Russell 2000</td><td class='num neg'>-0.13%</td></tr><tr><td class='tk'>EFA</td><td class='nm'>iShares MSCI EAFE</td><td class='num neg'>-0.09%</td></tr><tr><td class='tk'>VEA</td><td class='nm'>Vanguard FTSE Developed Mkts</td><td class='num neg'>-0.08%</td></tr><tr><td class='tk'>BSV</td><td class='nm'>Vanguard Short-Term Bond</td><td class='num neg'>-0.05%</td></tr><tr><td class='tk'>TLT</td><td class='nm'>iShares 20+Y Treasury</td><td class='num neg'>-0.05%</td></tr><tr><td class='tk'>SHY</td><td class='nm'>iShares 1-3Y Treasury</td><td class='num neg'>-0.05%</td></tr><tr><td class='tk'>IEF</td><td class='nm'>iShares 7-10Y Treasury</td><td class='num neg'>-0.04%</td></tr><tr><td class='tk'>TIP</td><td class='nm'>iShares TIPS Bond</td><td class='num neg'>-0.04%</td></tr><tr><td class='tk'>HYG</td><td class='nm'>iShares iBoxx HY Corp Bond</td><td class='num neg'>-0.04%</td></tr><tr><td class='tk'>BIL</td><td class='nm'>SPDR 1-3 Month T-Bill</td><td class='num neg'>-0.04%</td></tr><tr><td class='tk'>AGG</td><td class='nm'>iShares Core US Aggregate Bond</td><td class='num neg'>-0.04%</td></tr><tr><td class='tk'>VTI</td><td class='nm'>Vanguard Total Stock Market</td><td class='num neg'>-0.03%</td></tr><tr><td class='tk'>LQD</td><td class='nm'>iShares iBoxx IG Corp Bond</td><td class='num neg'>-0.03%</td></tr><tr><td class='tk'>USO</td><td class='nm'>United States Oil Fund</td><td class='num neg'>-0.03%</td></tr><tr><td class='tk'>SPY</td><td class='nm'>SPDR S&amp;P 500</td><td class='num neg'>-0.02%</td></tr><tr><td class='tk'>ACWI</td><td class='nm'>iShares MSCI ACWI</td><td class='num neg'>-0.02%</td></tr><tr><td class='tk'>DBC</td><td class='nm'>Invesco DB Commodity</td><td class='num pos'>+0.03%</td></tr><tr><td class='tk'>QQQ</td><td class='nm'>Invesco QQQ Trust</td><td class='num pos'>+0.08%</td></tr><tr><td class='tk'>VWO</td><td class='nm'>Vanguard FTSE Emerging Mkts</td><td class='num pos'>+0.09%</td></tr><tr><td class='tk'>GLD</td><td class='nm'>SPDR Gold Shares</td><td class='num pos'>+0.12%</td></tr><tr><td class='tk'>SLV</td><td class='nm'>iShares Silver Trust</td><td class='num pos'>+0.44%</td></tr></tbody></table><table class='turn'><tbody><tr><td>Wanted (one-way)</td><td class='num'>0.76%</td></tr><tr><td>Executed (one-way)</td><td class='num'>0.76%</td></tr><tr><td>Cap</td><td class='num'>2%</td></tr></tbody></table><p class='callout'>The full desired trade executed; the cap did not bind this week.</p></section><section class='card'><h2>What Drove It</h2><h3>Regime</h3><p>HMM posture: <b>Risk-on</b>.</p><table class='states'><thead><tr><th>State</th><th>Posture</th><th class='num'>Ann. ret</th><th class='num'>Ann. vol</th><th class='num'>P(next)</th></tr></thead><tbody><tr><td>State 1</td><td>risk_off</td><td class='num'>n/a</td><td class='num'>n/a</td><td class='num'>0.4%</td></tr><tr><td>State 2 (now)</td><td>risk_on</td><td class='num'>n/a</td><td class='num'>n/a</td><td class='num'>99.6%</td></tr></tbody></table><p class='note'>P(next) is the HMM transition probability from the current state.</p><h3>Views that fired</h3><table class='views'><thead><tr><th>Family</th><th>Asset(s)</th><th class='num'>Tilt</th><th class='num'>Confidence</th></tr></thead><tbody><tr><td>V1</td><td class='tk'>ACWI/EFA/IWM/QQQ/SPY/VEA/VTI/VWO</td><td class='num'>+3.00%</td><td class='num'>1.00</td></tr></tbody></table><p class='note'>Disabled families:</p><ul class='disabled'><li>V3 technical levels: disabled, measured -0.265 OOS Sharpe (largest negative in the ablation).</li><li>V4 sentiment: live-only, no historical archive to backtest against.</li><li>V5 dual momentum: disabled, measured -0.236 OOS Sharpe once fused through Black-Litterman.</li></ul><h3>The gate (where the decision happens)</h3><table class='gate'><thead><tr><th>Candidate book</th><th class='num'>Exp. excess ret</th><th class='num'>Exp. total ret</th><th class='num'>Vol</th><th class='num'>Utility</th></tr></thead><tbody><tr class='chosen'><td>black_litterman <span class='pick'>selected</span></td><td class='num'>+2.69%</td><td class='num'>+6.69%</td><td class='num'>9.9%</td><td class='num'>0.01701</td></tr><tr><td>gmv</td><td class='num'>+0.37%</td><td class='num'>+4.37%</td><td class='num'>2.2%</td><td class='num'>0.00318</td></tr><tr><td>risk_parity</td><td class='num'>+2.28%</td><td class='num'>+6.28%</td><td class='num'>8.5%</td><td class='num'>0.01554</td></tr><tr><td>cash <span class='cap-flag'>reference</span></td><td class='num'>+0.00%</td><td class='num'>+4.00%</td><td class='num'>0.0%</td><td class='num'>0.00000</td></tr></tbody></table><p class='note'>Gate: utility (risk aversion 2). Winner's utility margin over the runner-up: <b>0.00147</b>. "cash" is a 100%-cash reference row (0 excess return, 0 vol, 0 utility by construction), not a candidate the gate selects from.</p><h3>Anomaly override</h3><p>Reconstruction error <b>0.77912</b> vs threshold <b>5.30967</b>.</p><p class='callout'>Normal: reconstruction error is within the trained range; no override.</p></section><section class='card'><h2>Context</h2><p class='muted'>Insufficient live history to plot an equity curve (1 completed week(s); need 8). This panel populates automatically once the live book has run long enough.</p></section>
+    <footer>
+      <div class="ftrow">
+        <span>config 96f1d08e8b32</span>
+        <span>git e79209dfb24d</span>
+        <span>generated 2026-10-31 07:37 UTC</span>
+      </div>
+      <div class="ftrow">
+        <span>prices as-of 2026-10-30T00:00:00</span>
+        <span>rf as-of 2026-10-29T00:00:00</span>
+      </div>
+    </footer>
+    </main></body></html>
