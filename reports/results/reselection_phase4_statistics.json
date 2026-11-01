@@ -18,9 +18,17 @@
         "years": 4.818617385352498,
         "n_days": 1211,
         "sharpe_se": 0.47883276783999756,
-        "deflated_sharpe_ratio_daily_n_obs": 0.9999989521273793,
-        "deflated_sharpe_ratio_weekly_n_obs": 0.9846390528758169,
-        "n_weeks": 252
+        "n_weeks": 252,
+        "deflated_sharpe_ratio_weekly_n170": 0.6234764230041969,
+        "deflated_sharpe_ratio_daily_n170_secondary": 0.6232577101506571,
+        "deflated_sharpe_ratio_weekly_n171": 0.6232881275201939,
+        "deflated_sharpe_ratio_daily_n171_secondary": 0.6230697254086914,
+        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.8425302797473062,
+        "superseded_dsr_units_bug": {
+          "deflated_sharpe_ratio_daily_n_obs": 0.9999989521273793,
+          "deflated_sharpe_ratio_weekly_n_obs": 0.9846390528758169,
+          "erratum": "These values mixed an ANNUALIZED Sharpe ratio with a PER-OBSERVATION n_obs (a units bug, not a formula bug) -- superseded by the periods_per_year-aware values above. See docs/RESELECTION.md Step 1 erratum."
+        }
       },
       "c_permanent": {
         "ann_return": 0.09416489988071208,
@@ -66,9 +74,17 @@
         "years": 12.821355236139631,
         "n_days": 3226,
         "sharpe_se": 0.2959850758859051,
-        "deflated_sharpe_ratio_daily_n_obs": 1.0,
-        "deflated_sharpe_ratio_weekly_n_obs": 0.9999955190777309,
-        "n_weeks": 670
+        "n_weeks": 670,
+        "deflated_sharpe_ratio_weekly_n170": 0.7427685398229359,
+        "deflated_sharpe_ratio_daily_n170_secondary": 0.7424109242072098,
+        "deflated_sharpe_ratio_weekly_n171": 0.7425073646001944,
+        "deflated_sharpe_ratio_daily_n171_secondary": 0.7421500049391586,
+        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.9623521744880296,
+        "superseded_dsr_units_bug": {
+          "deflated_sharpe_ratio_daily_n_obs": 1.0,
+          "deflated_sharpe_ratio_weekly_n_obs": 0.9999955190777309,
+          "erratum": "These values mixed an ANNUALIZED Sharpe ratio with a PER-OBSERVATION n_obs (a units bug, not a formula bug) -- superseded by the periods_per_year-aware values above. See docs/RESELECTION.md Step 1 erratum."
+        }
       },
       "c_permanent": {
         "ann_return": 0.05944818073792546,
@@ -100,5 +116,7 @@
   "n_trials_prereg": 144,
   "n_prior_oos_looks": 26,
   "n_trials_total": 170,
+  "n_trials_total_171": 171,
+  "n_trials_headline": 171,
   "sharpe_std_across_trials": 0.11597066988780347
 }
