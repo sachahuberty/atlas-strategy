@@ -411,3 +411,114 @@ def test_save_checkpoint_raises_after_exhausting_retries(
         )
     # No orphan .tmp left behind to confuse the next run's resume scan.
     assert not path.with_suffix(path.suffix + ".tmp").exists()
+
+
+# --------------------------------------------------------------------- #
+# fold_delta_diagnostic (post-hoc IS diagnostic, external review
+# correction task): operates on two plain fold-indexed Series, no
+# backtest involved.
+# --------------------------------------------------------------------- #
+def test_fold_delta_diagnostic_known_counts_and_means():
+    # 2010-2013 (cold start): challenger wins all 4, by +1.0 each.
+    # 2014-2021 (warm): challenger wins 2, loses 5, ties 1.
+    current = pd.Series(
+        {
+            2010: 0.0, 2011: 0.0, 2012: 0.0, 2013: 0.0,
+            2014: 0.5, 2015: 0.5, 2016: 0.5, 2017: 0.5,
+            2018: 0.5, 2019: 0.5, 2020: 0.5, 2021: 0.5,
+        }
+    )
+    challenger = pd.Series(
+        {
+            2010: 1.0, 2011: 1.0, 2012: 1.0, 2013: 1.0,
+            2014: 0.6, 2015: 0.7,  # 2 wins
+            2016: 0.4, 2017: 0.3, 2018: 0.2, 2019: 0.1, 2020: 0.0,  # 5 losses
+            2021: 0.5,  # 1 tie
+        }
+    )
+    result = reselection.fold_delta_diagnostic(current, challenger)
+
+    expected_deltas = (challenger - current).to_numpy()
+
+    assert result["n_folds_all"] == 12
+    assert result["wins_all"] == 4 + 2
+    assert result["losses_all"] == 5
+    assert result["ties_all"] == 1
+    assert result["mean_delta_all"] == pytest.approx(expected_deltas.mean())
+
+    assert result["n_folds_2010_2013"] == 4
+    assert result["wins_2010_2013"] == 4
+    assert result["mean_delta_2010_2013"] == pytest.approx(1.0)
+
+    assert result["n_folds_2014_2021"] == 8
+    assert result["wins_2014_2021"] == 2
+    assert result["losses_2014_2021"] == 5
+    assert result["ties_2014_2021"] == 1
+
+
+def test_fold_delta_diagnostic_tie_tolerance_not_exact_zero():
+    # A tiny floating-point difference (well below tie_tol) must still
+    # count as a tie, not a win/loss.
+    current = pd.Series({2014: 0.5, 2015: 0.5})
+    challenger = pd.Series({2014: 0.5 + 1e-12, 2015: 0.5 - 2e-10})
+    result = reselection.fold_delta_diagnostic(current, challenger)
+    assert result["ties_all"] == 2
+    assert result["wins_all"] == 0
+    assert result["losses_all"] == 0
+
+
+def test_fold_delta_diagnostic_only_compares_common_folds():
+    current = pd.Series({2014: 0.5, 2015: 0.5, 2016: 0.5})
+    challenger = pd.Series({2014: 0.6, 2015: 0.4})  # 2016 missing
+    result = reselection.fold_delta_diagnostic(current, challenger)
+    assert result["n_folds_all"] == 2
+
+
+# --------------------------------------------------------------------- #
+# cold_start_diagnostic
+# --------------------------------------------------------------------- #
+def test_cold_start_diagnostic_flags_thin_history_years():
+    cfg = _small_cfg()
+    # hmm "enough history" threshold: vol_window_days + 10*n_states
+    # = 5 + 10*2 = 15 trading days (per _small_cfg's shrunk settings).
+    returns, _, _ = _market(n=120)  # starts 2020-06-01
+    dates = sorted(backtest.week_end_dates(returns.index))
+    # First few week-ends have < 15 trading days of history; later
+    # ones comfortably clear it.
+    result = reselection.cold_start_diagnostic(
+        dates, returns, "EQ1", cfg
+    )
+    early_year = dates[0].year
+    assert result.loc[early_year, "n_insufficient_regime_history"] >= 1
+    # A week-end well into the series must have enough history.
+    late_year = dates[-1].year
+    late_rows = result.loc[late_year]
+    assert (
+        late_rows["n_insufficient_regime_history"]
+        < late_rows["n_decisions"]
+    )
+
+
+def test_cold_start_diagnostic_short_covariance_window_flag():
+    cfg = _small_cfg()  # optimization.lookback_days = 60
+    returns, _, _ = _market(n=120)
+    dates = sorted(backtest.week_end_dates(returns.index))
+    result = reselection.cold_start_diagnostic(dates, returns, "EQ1", cfg)
+    # Every decision in the series' first lookback_days has a short
+    # covariance window by construction; the very first year must
+    # show at least one.
+    first_year = dates[0].year
+    assert result.loc[first_year, "n_short_covariance_window"] >= 1
+
+
+def test_cold_start_diagnostic_n_decisions_matches_date_count_per_year():
+    cfg = _small_cfg()
+    returns, _, _ = _market(n=120)
+    dates = sorted(backtest.week_end_dates(returns.index))
+    result = reselection.cold_start_diagnostic(dates, returns, "EQ1", cfg)
+    expected_counts = (
+        pd.Series(dates).dt.year.value_counts().sort_index()
+    )
+    actual = result["n_decisions"].sort_index()
+    assert list(actual.index) == list(expected_counts.index)
+    assert list(actual.to_numpy()) == list(expected_counts.to_numpy())

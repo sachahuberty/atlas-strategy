@@ -45,6 +45,9 @@ Public API:
     run_turnover_variant(target_weights_by_date, tickers, is_returns,
         cfg) -> backtest.BacktestResult
     save_checkpoint(obj, path) / load_checkpoint(path) -> obj | None
+    fold_delta_diagnostic(current_fold_values, challenger_fold_values,
+        tie_tol=1e-9, cold_start_years=(2010..2013)) -> dict  # post-hoc, external review
+    cold_start_diagnostic(dates, returns, market_ticker, cfg) -> pd.DataFrame
 """
 
 from __future__ import annotations
@@ -488,3 +491,120 @@ def build_variant_caches(
         if checkpoint_path is not None:
             save_checkpoint(cache, checkpoint_path)
     return cache
+
+
+# --------------------------------------------------------------------- #
+# Post-hoc IS diagnostic (external review correction task): reads only
+# the already-committed Phase 2 fold-Sharpe grid plus cheap, IS-only
+# history-check calls -- no new backtest, no OOS data.
+# --------------------------------------------------------------------- #
+def fold_delta_diagnostic(
+    current_fold_values: pd.Series,
+    challenger_fold_values: pd.Series,
+    tie_tol: float = 1e-9,
+    cold_start_years: tuple[int, ...] = (2010, 2011, 2012, 2013),
+) -> dict:
+    """Per-fold delta (challenger - current) summary for one
+    current-vs-challenger comparison: mean/median delta and win/loss/
+    tie counts over every fold, and the same split into the cold-start
+    years (`cold_start_years`, default 2010-2013 -- the IS folds thin
+    enough on trailing history that `regimes.has_enough_history`/the
+    covariance lookback regularly fail, see `cold_start_diagnostic`)
+    vs. the remaining IS years. A fold counts as a tie if
+    `|delta| < tie_tol` (default 1e-9), not merely delta == 0, since
+    these are floating-point Sharpe ratios.
+
+    This does not re-run any backtest -- it operates on whatever two
+    fold-indexed Series are passed in (e.g. two columns of the already
+    -committed `reselection_phase2_fold_sharpe.csv`).
+    """
+    common = current_fold_values.index.intersection(
+        challenger_fold_values.index
+    )
+    delta = (
+        challenger_fold_values.loc[common] - current_fold_values.loc[common]
+    ).dropna()
+
+    def _counts(d: pd.Series) -> tuple[int, int, int]:
+        wins = int((d > tie_tol).sum())
+        losses = int((d < -tie_tol).sum())
+        ties = int((d.abs() <= tie_tol).sum())
+        return wins, losses, ties
+
+    years = pd.Index([int(y) for y in delta.index])
+    is_cold = years.isin(cold_start_years)
+    cold_delta = delta[is_cold]
+    warm_delta = delta[~is_cold]
+
+    wins_all, losses_all, ties_all = _counts(delta)
+    wins_cold, losses_cold, ties_cold = _counts(cold_delta)
+    wins_warm, losses_warm, ties_warm = _counts(warm_delta)
+
+    return {
+        "n_folds_all": len(delta),
+        "mean_delta_all": float(delta.mean()) if len(delta) else float("nan"),
+        "median_delta_all": (
+            float(delta.median()) if len(delta) else float("nan")
+        ),
+        "wins_all": wins_all,
+        "losses_all": losses_all,
+        "ties_all": ties_all,
+        "n_folds_2010_2013": len(cold_delta),
+        "mean_delta_2010_2013": (
+            float(cold_delta.mean()) if len(cold_delta) else float("nan")
+        ),
+        "wins_2010_2013": wins_cold,
+        "losses_2010_2013": losses_cold,
+        "ties_2010_2013": ties_cold,
+        "n_folds_2014_2021": len(warm_delta),
+        "mean_delta_2014_2021": (
+            float(warm_delta.mean()) if len(warm_delta) else float("nan")
+        ),
+        "wins_2014_2021": wins_warm,
+        "losses_2014_2021": losses_warm,
+        "ties_2014_2021": ties_warm,
+    }
+
+
+def cold_start_diagnostic(
+    dates: list[pd.Timestamp],
+    returns: pd.DataFrame,
+    market_ticker: str,
+    cfg: dict,
+) -> pd.DataFrame:
+    """Per-IS-year counts of two cold-start mechanisms, computed
+    directly from IS price/return data (no OOS access, no strategy
+    backtest -- just the same cheap, pure history-check functions the
+    live pipeline itself calls):
+
+    - `insufficient_regime_history`: `regimes.has_enough_history`
+      fails for `window[market_ticker]`, forcing that week's posture
+      to neutral regardless of the HMM's actual read (strategy.py's
+      own fallback).
+    - `short_covariance_window`: `window.tail(optimization.
+      lookback_days)` has fewer than `lookback_days` rows, i.e. the
+      covariance estimate that week is based on less than the full
+      trailing window the config calls for.
+
+    Returns a DataFrame indexed by year with columns `n_decisions`,
+    `n_insufficient_regime_history`, `n_short_covariance_window`.
+    """
+    lookback = cfg["optimization"]["lookback_days"]
+    rows = []
+    for as_of in dates:
+        window = returns.loc[:as_of]
+        market_returns = window[market_ticker]
+        rows.append({
+            "as_of": as_of,
+            "year": as_of.year,
+            "insufficient_regime_history": not regimes.has_enough_history(
+                market_returns, cfg
+            ),
+            "short_covariance_window": len(window.tail(lookback)) < lookback,
+        })
+    detail = pd.DataFrame(rows)
+    return detail.groupby("year").agg(
+        n_decisions=("as_of", "count"),
+        n_insufficient_regime_history=("insufficient_regime_history", "sum"),
+        n_short_covariance_window=("short_covariance_window", "sum"),
+    )
