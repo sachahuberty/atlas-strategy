@@ -3,7 +3,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.stats import norm
 
 from atlas.metrics import (
     ann_return,
@@ -15,6 +14,7 @@ from atlas.metrics import (
     newey_west_mean_test,
     portfolio_return,
     portfolio_vol,
+    probabilistic_sharpe_ratio,
     sharpe,
     sharpe_standard_error,
     sortino,
@@ -189,26 +189,83 @@ def test_newey_west_mean_test_se_larger_than_iid_under_autocorrelation():
 
 
 # --------------------------------------------------------------------- #
-# deflated_sharpe_ratio
+# probabilistic_sharpe_ratio / deflated_sharpe_ratio
+#
+# Reselection task (external review): the original deflated_sharpe_
+# ratio mixed an ANNUALIZED Sharpe ratio with a PER-OBSERVATION n_obs
+# (a units bug), reproducing a reported OOS DSR of ~0.98 that should
+# have been ~0.62. periods_per_year is now a required argument on
+# both functions, and every known-answer value below was independently
+# verified by hand before being encoded as a test (not reverse-
+# engineered from whatever the code happened to produce).
 # --------------------------------------------------------------------- #
-def test_deflated_sharpe_ratio_without_trial_correction_is_probabilistic_sr():
-    # sharpe_std_across_trials omitted -> SR_0 = 0, so this reduces to
-    # the ordinary Probabilistic Sharpe Ratio (normal returns: skew=0,
-    # kurtosis=3 collapses the variance term to 1/(n_obs-1)).
-    sr, n_obs = 0.8, 500
-    dsr = deflated_sharpe_ratio(sr, n_trials=1, n_obs=n_obs)
-    sigma_sr = np.sqrt(1.0 / (n_obs - 1))
-    expected = norm.cdf(sr / sigma_sr)
-    assert dsr == pytest.approx(expected)
+def test_deflated_sharpe_ratio_known_value_oos_weekly():
+    # Annual SR 0.45786, annual cross-trial std 0.11597, N=170 trials,
+    # n_obs=252 weekly observations, periods_per_year=52.
+    dsr = deflated_sharpe_ratio(
+        0.45786, n_trials=170, n_obs=252, periods_per_year=52,
+        sharpe_std_across_trials=0.11597,
+    )
+    assert dsr == pytest.approx(0.623, abs=0.005)
+
+
+def test_probabilistic_sharpe_ratio_known_value_no_trial_correction():
+    # Same inputs, N=1 (no trial correction) -> SR_0=0, ordinary PSR.
+    psr = deflated_sharpe_ratio(
+        0.45786, n_trials=1, n_obs=252, periods_per_year=52,
+    )
+    assert psr == pytest.approx(0.843, abs=0.005)
+
+
+def test_deflated_sharpe_ratio_known_value_full_window_weekly():
+    dsr = deflated_sharpe_ratio(
+        0.49647, n_trials=170, n_obs=670, periods_per_year=52,
+        sharpe_std_across_trials=0.11597,
+    )
+    assert dsr == pytest.approx(0.743, abs=0.005)
+
+
+def test_deflated_sharpe_ratio_requires_periods_per_year():
+    # The old call pattern (no periods_per_year) must no longer
+    # silently compile and produce a units-mixed, overconfident DSR --
+    # it must raise outright.
+    with pytest.raises(TypeError):
+        deflated_sharpe_ratio(0.45786, n_trials=170, n_obs=252)
+
+
+def test_probabilistic_sharpe_ratio_requires_periods_per_year():
+    with pytest.raises(TypeError):
+        probabilistic_sharpe_ratio(0.45786, 0.0, 252)
+
+
+def test_probabilistic_sharpe_ratio_annualization_is_invariant():
+    # Converting annualized inputs to per-period internally must give
+    # the same answer as passing already-per-period inputs with
+    # periods_per_year=1 (no further conversion) -- checks the
+    # annualize/de-annualize round trip itself, not an external datum.
+    periods_per_year = 52
+    sr_period, sr_benchmark_period, n_obs = 0.07, 0.02, 300
+    sr_annual = sr_period * np.sqrt(periods_per_year)
+    sr_benchmark_annual = sr_benchmark_period * np.sqrt(periods_per_year)
+
+    via_annual = probabilistic_sharpe_ratio(
+        sr_annual, sr_benchmark_annual, n_obs, periods_per_year
+    )
+    via_period_direct = probabilistic_sharpe_ratio(
+        sr_period, sr_benchmark_period, n_obs, periods_per_year=1
+    )
+    assert via_annual == pytest.approx(via_period_direct)
 
 
 def test_deflated_sharpe_ratio_decreases_with_more_trials():
     sr, n_obs = 0.8, 500
     dsr_few = deflated_sharpe_ratio(
-        sr, n_trials=5, n_obs=n_obs, sharpe_std_across_trials=0.2
+        sr, n_trials=5, n_obs=n_obs, periods_per_year=52,
+        sharpe_std_across_trials=0.2,
     )
     dsr_many = deflated_sharpe_ratio(
-        sr, n_trials=200, n_obs=n_obs, sharpe_std_across_trials=0.2
+        sr, n_trials=200, n_obs=n_obs, periods_per_year=52,
+        sharpe_std_across_trials=0.2,
     )
     assert dsr_many < dsr_few
 
@@ -216,7 +273,7 @@ def test_deflated_sharpe_ratio_decreases_with_more_trials():
 def test_deflated_sharpe_ratio_is_a_probability():
     for n_trials in (1, 10, 144, 171):
         dsr = deflated_sharpe_ratio(
-            0.5, n_trials=n_trials, n_obs=300,
+            0.5, n_trials=n_trials, n_obs=300, periods_per_year=52,
             sharpe_std_across_trials=0.15,
         )
         assert 0.0 <= dsr <= 1.0
@@ -224,10 +281,12 @@ def test_deflated_sharpe_ratio_is_a_probability():
 
 def test_deflated_sharpe_ratio_higher_sharpe_gives_higher_dsr():
     low = deflated_sharpe_ratio(
-        0.2, n_trials=144, n_obs=500, sharpe_std_across_trials=0.2
+        0.2, n_trials=144, n_obs=500, periods_per_year=52,
+        sharpe_std_across_trials=0.2,
     )
     high = deflated_sharpe_ratio(
-        0.9, n_trials=144, n_obs=500, sharpe_std_across_trials=0.2
+        0.9, n_trials=144, n_obs=500, periods_per_year=52,
+        sharpe_std_across_trials=0.2,
     )
     assert high > low
 
@@ -236,5 +295,7 @@ def test_deflated_sharpe_ratio_degenerate_zero_variance():
     # sigma_sr_hat collapses to ~0 when n_obs is at its floor; must not
     # raise a ZeroDivisionError-equivalent, and must return a boundary
     # probability consistent with sharpe_ratio vs sr_0.
-    result = deflated_sharpe_ratio(0.1, n_trials=1, n_obs=1)
+    result = deflated_sharpe_ratio(
+        0.1, n_trials=1, n_obs=1, periods_per_year=52
+    )
     assert result in (0.0, 1.0)
