@@ -177,6 +177,35 @@ unplanned change, not a substitute for that decision.
 
 ## Results
 
+> **Contamination notice (2026-11-01).** The 2022-2026 OOS window
+> below has been looked at, directly or indirectly, by roughly 171
+> configuration choices across this project's history (module
+> ablations, turnover/gate sensitivity, and a dedicated IS-vs-OOS
+> re-selection task) -- it is a development set, not a held-out test,
+> and no Sharpe comparison on it should be read as a confident
+> ranking. The corrected deflated Sharpe ratio for the current
+> config's OOS excess Sharpe is **~0.62** (previously misreported as
+> ~0.98 due to a units bug), meaning the evidence that it is reliably
+> above zero is weak. Full detail, corrected statistics, and the
+> re-selection outcome: **`docs/RESELECTION.md`**. **The only clean
+> record is the live book from 2026-10-23 onward** -- nothing before
+> that date has informed any decision in this project.
+
+**Re-selection outcome, in one paragraph:** a leakage audit found that
+four of this project's config choices (V3/V5 on/off, turnover cap,
+gate risk-aversion) had been made partly by looking at 2022-2026
+performance. A dedicated task re-derived each one from 2010-2021
+(in-sample) data only, under a rule fixed in advance
+(`docs/RESELECTION_PREREG.md`). Two of four historical choices held up
+IS-only (V3 off, gate A=2); two did not (the pre-registered rule
+would adopt V5 and tighten turnover to 1%), but neither was adopted --
+V5's apparent IS edge turns out to come entirely from four 2010-2013
+cold-start years and loses money IS over 2014-2021, and the 1% cap's
+edge is noise-sized. The current config was kept, on IS-only grounds,
+not because of the OOS result. Full reasoning, including the
+pre-registered rule's own weaknesses this exposed: `docs/
+RESELECTION.md` Section 4-5.
+
 **Start here: the corrected numbers.** ATLAS's results were affected by
 a Black-Litterman specification bug (ANALYSIS_V4.md Sec 2.1, found
 2026-10-18) that produced an unintended high-volatility/commodity tilt
@@ -832,6 +861,12 @@ this project's methodology exists to produce.
 
 ### The benchmark comparison itself is window-dependent
 
+**Historical (2026-11-01): this subsection describes the pre-ANALYSIS_V4
+pipeline** (the Black-Litterman units bug, Sec above) and is kept for
+the record, not deleted -- the current, corrected config does not
+reduce to plain GMV. See "ANALYSIS_V4: the corrected numbers" above
+for the live story.
+
 Re-running `permanent` and GMV over the **in-sample** period
 (2013-2021, never used to design either) reframes the entire question
 (DIAGNOSTIC.md §5.3):
@@ -859,16 +894,23 @@ turnover parameters are no longer grid-selected -- see `config.yaml`'s
 `rebalance` section and notebook 09's addenda for the full history and
 every intermediate number.
 
-**On statistical significance:** every Sharpe above carries an
-estimated standard error of roughly ±0.22 (0.5/√4.5 years of daily
-data) purely from sampling noise. This table should be read as a set
-of plausible outcomes clustered around a similar Sharpe, not a
-confident ranking. Full per-quarter breakdown and methodology notes
-in `notebooks/09_strategy_backtest.ipynb`; the full evidence-based
+**On statistical significance (corrected 2026-11-01):** the simple
+`0.5/√years` convention used in earlier drafts of this section
+understated the true sampling noise. The asymptotic standard error of
+a Sharpe ratio estimate is `sqrt((1 + SR^2/2) / years)`
+(docs/RESELECTION.md Sec 7) -- for a Sharpe near 1.0 over ~4.8 years
+of OOS data that is **roughly ±0.5**, more than double the ±0.22
+figure this section originally stated. This table should be read as a
+set of plausible outcomes clustered around a similar Sharpe, not a
+confident ranking -- more so than previously stated. Full per-quarter
+breakdown and methodology notes in
+`notebooks/09_strategy_backtest.ipynb`; the full evidence-based
 diagnosis is in `DIAGNOSTIC.md`.
 
-**Stage 10 forward-looking risk report** (notebook 10), on the current
-book as of 2026-07-24: historical stress through 2008/2020/2022 shows
+**Stage 10 forward-looking risk report** (notebook 10) -- **historical
+(2026-11-01): run on the pre-ANALYSIS_V4 pipeline, kept for the
+record, not re-run**. On the current book as of 2026-07-24: historical
+stress through 2008/2020/2022 shows
 -17.6% / -16.9% / -10.4% cumulative return respectively (GFC 2008 the
 worst, -22.6% max drawdown); a reverse stress scan of the full
 2007-2026 history independently rediscovers the COVID crash
