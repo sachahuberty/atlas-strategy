@@ -1,5 +1,7 @@
 # ATLAS — All-Techniques Layered Allocation Strategy
 
+[![Tests](https://github.com/sachahuberty/atlas-strategy/actions/workflows/tests.yml/badge.svg)](https://github.com/sachahuberty/atlas-strategy/actions/workflows/tests.yml)
+
 Weekly-rebalanced, regime-aware, multi-signal global asset allocation strategy.
 Built as a personal portfolio project on the IE MBDS Algorithmic Trading course material.
 
