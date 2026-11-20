@@ -987,3 +987,7 @@ here) came back at **-0.236 excess Sharpe, the largest negative
 marginal contribution of any module measured across this whole
 study** -- see the Results section above for the full writeup and the
 resulting `modules.momentum_view: false`.
+
+## License
+
+[MIT](LICENSE)
