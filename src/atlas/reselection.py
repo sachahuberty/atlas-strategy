@@ -46,7 +46,8 @@ Public API:
         cfg) -> backtest.BacktestResult
     save_checkpoint(obj, path) / load_checkpoint(path) -> obj | None
     fold_delta_diagnostic(current_fold_values, challenger_fold_values,
-        tie_tol=1e-9, cold_start_years=(2010..2013)) -> dict  # post-hoc, external review
+        tie_tol=1e-9, cold_start_years=(2010..2012)) -> dict
+        # post-hoc, external review
     cold_start_diagnostic(dates, returns, market_ticker, cfg) -> pd.DataFrame
 """
 
@@ -502,17 +503,21 @@ def fold_delta_diagnostic(
     current_fold_values: pd.Series,
     challenger_fold_values: pd.Series,
     tie_tol: float = 1e-9,
-    cold_start_years: tuple[int, ...] = (2010, 2011, 2012, 2013),
+    cold_start_years: tuple[int, ...] = (2010, 2011, 2012),
 ) -> dict:
     """Per-fold delta (challenger - current) summary for one
     current-vs-challenger comparison: mean/median delta and win/loss/
     tie counts over every fold, and the same split into the cold-start
-    years (`cold_start_years`, default 2010-2013 -- the IS folds thin
-    enough on trailing history that `regimes.has_enough_history`/the
-    covariance lookback regularly fail, see `cold_start_diagnostic`)
-    vs. the remaining IS years. A fold counts as a tie if
-    `|delta| < tie_tol` (default 1e-9), not merely delta == 0, since
-    these are floating-point Sharpe ratios.
+    years (`cold_start_years`, default 2010-2012 -- the IS folds thin
+    enough on trailing history that the covariance lookback regularly
+    fails, see `cold_start_diagnostic`) vs. the remaining IS years
+    (2013-2021: `cold_start_diagnostic` itself shows 2013 already has
+    a full covariance window and zero forced-neutral weeks, so it
+    belongs on the warm side, not the cold one -- external review Part
+    B3 corrected an earlier version of this default that wrongly
+    included 2013 among the cold-start years). A fold counts as a tie
+    if `|delta| < tie_tol` (default 1e-9), not merely delta == 0,
+    since these are floating-point Sharpe ratios.
 
     This does not re-run any backtest -- it operates on whatever two
     fold-indexed Series are passed in (e.g. two columns of the already
@@ -549,20 +554,20 @@ def fold_delta_diagnostic(
         "wins_all": wins_all,
         "losses_all": losses_all,
         "ties_all": ties_all,
-        "n_folds_2010_2013": len(cold_delta),
-        "mean_delta_2010_2013": (
+        "n_folds_2010_2012": len(cold_delta),
+        "mean_delta_2010_2012": (
             float(cold_delta.mean()) if len(cold_delta) else float("nan")
         ),
-        "wins_2010_2013": wins_cold,
-        "losses_2010_2013": losses_cold,
-        "ties_2010_2013": ties_cold,
-        "n_folds_2014_2021": len(warm_delta),
-        "mean_delta_2014_2021": (
+        "wins_2010_2012": wins_cold,
+        "losses_2010_2012": losses_cold,
+        "ties_2010_2012": ties_cold,
+        "n_folds_2013_2021": len(warm_delta),
+        "mean_delta_2013_2021": (
             float(warm_delta.mean()) if len(warm_delta) else float("nan")
         ),
-        "wins_2014_2021": wins_warm,
-        "losses_2014_2021": losses_warm,
-        "ties_2014_2021": ties_warm,
+        "wins_2013_2021": wins_warm,
+        "losses_2013_2021": losses_warm,
+        "ties_2013_2021": ties_warm,
     }
 
 

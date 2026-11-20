@@ -208,51 +208,62 @@ def main() -> int:
     )
 
     # --- Corrected DSR/PSR: weekly units are the headline; daily is a
-    # clearly-labelled, consistently-computed secondary figure. ---
+    # clearly-labelled, consistently-computed secondary figure.
+    # Computed for BOTH "a_current" (what is actually live) and
+    # "b_phase2" (the IS-selected config) -- external review Part B1
+    # found the README's "~0.62" DSR had been quoting b_phase2's value
+    # as if it were current's, so both must exist, clearly labelled,
+    # so the two are never conflated again. ---
     for window_name in WINDOWS:
-        m = report["windows"][window_name]["b_phase2"]
         n_weeks = report["windows"][window_name]["paired_b_vs_c"]["n"]
-        m["n_weeks"] = n_weeks
+        for cfg_key in ("a_current", "b_phase2"):
+            m = report["windows"][window_name][cfg_key]
+            m["n_weeks"] = n_weeks
 
-        for n_trials, suffix in ((N_TRIALS_170, "170"), (N_TRIALS_171, "171")):
-            m[f"deflated_sharpe_ratio_weekly_n{suffix}"] = (
+            for n_trials, suffix in (
+                (N_TRIALS_170, "170"), (N_TRIALS_171, "171"),
+            ):
+                m[f"deflated_sharpe_ratio_weekly_n{suffix}"] = (
+                    metrics.deflated_sharpe_ratio(
+                        m["excess_sharpe"], n_trials=n_trials,
+                        n_obs=n_weeks, periods_per_year=52,
+                        sharpe_std_across_trials=sharpe_std_across_trials,
+                    )
+                )
+                m[f"deflated_sharpe_ratio_daily_n{suffix}_secondary"] = (
+                    metrics.deflated_sharpe_ratio(
+                        m["excess_sharpe"], n_trials=n_trials,
+                        n_obs=m["n_days"], periods_per_year=252,
+                        sharpe_std_across_trials=sharpe_std_across_trials,
+                    )
+                )
+            m["probabilistic_sharpe_ratio_weekly_no_trial_correction"] = (
                 metrics.deflated_sharpe_ratio(
-                    m["excess_sharpe"], n_trials=n_trials, n_obs=n_weeks,
+                    m["excess_sharpe"], n_trials=1, n_obs=n_weeks,
                     periods_per_year=52,
-                    sharpe_std_across_trials=sharpe_std_across_trials,
                 )
             )
-            m[f"deflated_sharpe_ratio_daily_n{suffix}_secondary"] = (
-                metrics.deflated_sharpe_ratio(
-                    m["excess_sharpe"], n_trials=n_trials, n_obs=m["n_days"],
-                    periods_per_year=252,
-                    sharpe_std_across_trials=sharpe_std_across_trials,
-                )
-            )
-        m["probabilistic_sharpe_ratio_weekly_no_trial_correction"] = (
-            metrics.deflated_sharpe_ratio(
-                m["excess_sharpe"], n_trials=1, n_obs=n_weeks,
-                periods_per_year=52,
-            )
-        )
 
-        old_b = old_json.get("windows", {}).get(window_name, {}).get(
-            "b_phase2", {}
-        )
-        m["superseded_dsr_units_bug"] = {
-            "deflated_sharpe_ratio_daily_n_obs": old_b.get(
-                "deflated_sharpe_ratio_daily_n_obs"
-            ),
-            "deflated_sharpe_ratio_weekly_n_obs": old_b.get(
-                "deflated_sharpe_ratio_weekly_n_obs"
-            ),
-            "erratum": (
-                "These values mixed an ANNUALIZED Sharpe ratio with a "
-                "PER-OBSERVATION n_obs (a units bug, not a formula "
-                "bug) -- superseded by the periods_per_year-aware "
-                "values above. See docs/RESELECTION.md Step 1 erratum."
-            ),
-        }
+            old_m = old_json.get("windows", {}).get(window_name, {}).get(
+                cfg_key, {}
+            )
+            old_daily = old_m.get("deflated_sharpe_ratio_daily_n_obs")
+            old_weekly = old_m.get("deflated_sharpe_ratio_weekly_n_obs")
+            if old_daily is not None or old_weekly is not None:
+                # Only b_phase2 ever carried the pre-fix, units-buggy
+                # DSR under this project's (mistaken) "the" headline;
+                # a_current never had one to supersede.
+                m["superseded_dsr_units_bug"] = {
+                    "deflated_sharpe_ratio_daily_n_obs": old_daily,
+                    "deflated_sharpe_ratio_weekly_n_obs": old_weekly,
+                    "erratum": (
+                        "These values mixed an ANNUALIZED Sharpe ratio "
+                        "with a PER-OBSERVATION n_obs (a units bug, not "
+                        "a formula bug) -- superseded by the "
+                        "periods_per_year-aware values above. See "
+                        "docs/RESELECTION.md Step 1 erratum."
+                    ),
+                }
 
     report["n_trials_prereg"] = N_TRIALS_PREREG
     report["n_prior_oos_looks"] = N_PRIOR_OOS_LOOKS
@@ -266,10 +277,17 @@ def main() -> int:
     print(f"Wrote corrected statistics to {OUT_PATH}")
 
     for window_name in WINDOWS:
-        m = report["windows"][window_name]["b_phase2"]
-        dsr_170 = round(m["deflated_sharpe_ratio_weekly_n170"], 4)
-        dsr_171 = round(m["deflated_sharpe_ratio_weekly_n171"], 4)
-        print(window_name, "DSR weekly N170:", dsr_170, "N171:", dsr_171)
+        for cfg_key in ("a_current", "b_phase2"):
+            m = report["windows"][window_name][cfg_key]
+            dsr_170 = round(m["deflated_sharpe_ratio_weekly_n170"], 4)
+            dsr_171 = round(m["deflated_sharpe_ratio_weekly_n171"], 4)
+            psr = round(
+                m["probabilistic_sharpe_ratio_weekly_no_trial_correction"], 4
+            )
+            print(
+                window_name, cfg_key, "DSR weekly N170:", dsr_170,
+                "N171:", dsr_171, "PSR(no correction):", psr,
+            )
     return 0
 
 

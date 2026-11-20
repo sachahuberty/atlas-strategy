@@ -52,15 +52,19 @@ CHALLENGERS = {
 }
 
 # From the task's expected-value table, for the reproduction check
-# below -- not enforced, only reported if different.
+# below -- not enforced, only reported if different. The 2013_2021
+# split (external review Part B3) corrects an earlier 2014_2021 split
+# that wrongly grouped 2013 with the warm years' complement instead of
+# with them -- cold_start_diagnostic shows 2013 already has a full
+# covariance window, so it belongs on the warm side.
 _EXPECTED = {
     "V5": {"mean_delta_all": 0.049, "wins_all": 7, "losses_all": 4,
-           "ties_all": 1, "wins_2014_2021": 4, "mean_delta_2014_2021": -0.056},
+           "ties_all": 1, "wins_2013_2021": 5, "mean_delta_2013_2021": -0.042},
     "turnover_1pct": {"mean_delta_all": 0.020, "wins_all": 8,
                        "losses_all": 4, "ties_all": 0,
-                       "wins_2014_2021": 5, "mean_delta_2014_2021": 0.016},
+                       "wins_2013_2021": 6, "mean_delta_2013_2021": 0.014},
     "V3": {"mean_delta_all": 0.138, "wins_all": 6, "losses_all": 6,
-           "ties_all": 0, "wins_2014_2021": 5, "mean_delta_2014_2021": 0.175},
+           "ties_all": 0, "wins_2013_2021": 5, "mean_delta_2013_2021": 0.155},
     "risk_off_bonds_cash": {"ties_all": 5},
     "risk_off_bonds_gold": {"ties_all": 5},
 }

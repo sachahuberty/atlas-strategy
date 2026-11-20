@@ -105,29 +105,41 @@ are IS-only, from the post-hoc diagnostic below (`reports/results/
 reselection_posthoc_is_diagnostic.csv`, `src/atlas/reselection.
 fold_delta_diagnostic`) -- **not** the 2022-2026 result in Section 7.
 
-| Challenger | Mean delta, all 12 folds | Wins/losses/ties, all | 2010-2013 wins | 2010-2013 mean delta | 2014-2021 wins (of 8) | 2014-2021 mean delta |
+| Challenger | Mean delta, all 12 folds | Wins/losses/ties, all | 2010-2012 wins | 2010-2012 mean delta | 2013-2021 wins (of 9) | 2013-2021 mean delta |
 | --- | --- | --- | --- | --- | --- | --- |
-| V5 on | **+0.049** | 7/4/1 | 3/4 | **+0.257** | **4/8** | **-0.056** |
-| turnover 1% | +0.020 | 8/4/0 | 3/4 | +0.030 | 5/8 | +0.016 |
-| V3 on | +0.138 | 6/6/0 | 1/4 | +0.063 | 5/8 | +0.175 |
-| risk_off bonds_cash | -0.006 | 3/4/5 | 1/4 | -0.006 | 2/8 | -0.006 |
-| risk_off bonds_gold | -0.000 | 4/3/5 | 1/4 | -0.001 | 3/8 | +0.000 |
-| gate A=1 | +0.031 | 3/1/8 | 2/4 | +0.069 | 1/8 | +0.012 |
-| gate A=3 | +0.058 | 6/3/3 | 3/4 | +0.081 | 3/8 | +0.047 |
-| gate A=5 | +0.082 | 6/6/0 | 3/4 | +0.513 | 3/8 | -0.134 |
-| turnover 4% | -0.033 | 4/7/1 | 1/4 | -0.025 | 3/8 | -0.038 |
+| V5 on | **+0.049** | 7/4/1 | 2/3 | **+0.321** | **5/9** | **-0.042** |
+| turnover 1% | +0.020 | 8/4/0 | 2/3 | +0.040 | 6/9 | +0.014 |
+| V3 on | +0.138 | 6/6/0 | 1/3 | +0.086 | 5/9 | +0.155 |
+| risk_off bonds_cash | -0.006 | 3/4/5 | 1/3 | -0.007 | 2/9 | -0.005 |
+| risk_off bonds_gold | -0.000 | 4/3/5 | 1/3 | -0.001 | 3/9 | +0.000 |
+| gate A=1 | +0.031 | 3/1/8 | 2/3 | +0.091 | 1/9 | +0.010 |
+| gate A=3 | +0.058 | 6/3/3 | 2/3 | +0.088 | 4/9 | +0.049 |
+| gate A=5 | +0.082 | 6/6/0 | 2/3 | +0.683 | 4/9 | -0.119 |
+| turnover 4% | -0.033 | 4/7/1 | 1/3 | -0.033 | 3/9 | -0.033 |
 
-**V5's entire IS win comes from the 2010-2013 cold-start years.** Over
-2010-2013 turning V5 on adds +0.257 average excess Sharpe per fold
-(3 of 4 years won); over 2014-2021 -- the years that are not a strategy
-warm-up artifact -- it **loses** on average (-0.056, winning only 4 of
-8). The all-years verdict (+0.049, 7/12) is driven almost entirely by
-four unrepresentative years. The 1% turnover cap's all-years edge
-(+0.020, "8/12 wins") is also small against the fold-to-fold noise
-visible everywhere in this table (several challengers show swings of
-±0.1-0.5 from one fold to the next) -- it survives into 2014-2021
-(+0.016, 5/8) but the margin is noise-sized, not a result you would
-bet the live book on.
+(Corrected, external review Part B3: this table originally split
+2010-2013 vs. 2014-2021 -- 2013 wrongly grouped with the cold-start
+years. `cold_start_diagnostic` below shows 2013 already has a full
+covariance window and zero forced-neutral weeks, so the real split is
+2010-2012 (3 folds) vs. 2013-2021 (9 folds).)
+
+**V5's IS win is concentrated in the 2010-2012 cold-start years, and
+reverses over 2013-2021.** Over 2010-2012 turning V5 on adds +0.321
+average excess Sharpe per fold (2 of 3 years won, 1 tie); over
+2013-2021 -- the years that are not a strategy warm-up artifact -- it
+**loses** on average (-0.042), even though it still wins 5 of those 9
+folds: the losing folds are large enough to flip the sign. The
+all-years verdict (+0.049, 7/12) leans heavily on three unrepresentative
+years. **V3's story runs the other way: its 2013-2021 mean (+0.155) is
+LARGER than its all-years mean (+0.138), and it actually loses on
+balance over 2010-2012 (1 win, 2 losses)** -- V3's edge, such as it is,
+is not a cold-start artifact, which is exactly what makes Section 6
+call it the cleaner (if still unadopted) signal of the two. The 1%
+turnover cap's all-years edge (+0.020, "8/12 wins") is small against
+the fold-to-fold noise visible everywhere in this table (several
+challengers show swings of ±0.1-0.7 from one fold to the next) -- it
+survives into 2013-2021 (+0.014, 6/9) but the margin is noise-sized,
+not a result you would bet the live book on.
 
 The cold-start mechanism itself, documented precisely
 (`reports/results/reselection_posthoc_cold_start.csv`,
@@ -147,12 +159,14 @@ decision in those three years is estimated on a covariance window
 shorter than `optimization.lookback_days` (756 days / ~3 years), and
 2010 additionally has 12 of 52 weeks where the HMM lacked enough
 trailing history and the posture was forced to neutral regardless of
-what the market was actually doing. 2013 is the first year with a
-full-length covariance window. The fold scheme (docs/
-RESELECTION_PREREG.md Sec 1) includes 2010-2013 because that is the
+what the market was actually doing. **2013 is the first year with a
+full-length covariance window and zero forced-neutral weeks -- it
+belongs with 2014-2021, not with 2010-2012**, which is exactly the
+correction applied to the table above. The fold scheme (docs/
+RESELECTION_PREREG.md Sec 1) includes 2010-2012 because that is the
 same fold scheme notebook 09's own grid searches already used -- it
 was the right choice to reuse exactly, as pre-registered, but it means
-4 of this task's 12 "IS years" are, for V5 and the turnover cap,
+3 of this task's 12 "IS years" are, for V5 and the turnover cap,
 measuring a cold-start artifact as much as a genuine signal.
 
 **This deviation was decided after seeing 2022-2026.** A skeptical
@@ -173,29 +187,33 @@ has real gaps this specific case exposed:
 - **The strict-majority-of-folds test over 12 noisy annual folds
   admits noise-level wins and rejected the single largest IS
   improvement measured anywhere in this task.** V3's +0.138 mean delta
-  (+0.175 over 2014-2021 alone) is larger than V5's or the turnover
-  cap's, in both the full and the warm-years column -- but it only won
-  6 of 12 folds (a tie with its losses), so the rule correctly keeps
-  it off by its own strict-majority requirement. The rule is not
-  biased toward adopting large improvements; it is sensitive to the
-  SHAPE of the fold-by-fold win pattern, which can reject a bigger,
-  more consistent-looking improvement (V3, 5/8 warm-year wins, losing
-  years still modest) while accepting a smaller, more erratic one
-  (V5, 4/8 warm-year wins net negative, offset by an extreme cold-start
-  read) just because the overall count crossed the majority line.
-- **Warm-up years (2010-2013) were included as folds on equal footing
-  with 2014-2021**, despite Section 4's finding that they are
+  (+0.155 over 2013-2021 alone -- LARGER than its all-years mean) is
+  bigger than V5's or the turnover cap's, in both the full and the
+  warm-years column -- but it only won 6 of 12 folds (a tie with its
+  losses), so the rule correctly keeps it off by its own
+  strict-majority requirement. The rule is not biased toward adopting
+  large improvements; it is sensitive to the SHAPE of the fold-by-fold
+  win pattern, which can reject a bigger, more consistent-looking
+  improvement (V3, 5/9 warm-year wins, losing years still modest)
+  while accepting a smaller, more erratic one (V5, 5/9 warm-year wins
+  but net NEGATIVE over those same 9 folds, offset by an extreme
+  cold-start read) just because the overall count crossed the majority
+  line.
+- **Warm-up years (2010-2012) were included as folds on equal footing
+  with 2013-2021**, despite Section 4's finding that they are
   measuring cold-start mechanics, not strategy skill, for at least
   three of the nine challengers tested.
 - **Phase C had almost no statistical power.** 5 of the risk-off
-  target's 12 folds are identical by construction (`risk_off` posture
-  never fired in those years under ANY target, so `bonds_cash`/
-  `bonds_gold` tie `legacy` exactly) -- an alternative needed
+  target's 12 folds come out identical regardless of target -- the
+  `risk_off` posture simply never fired in those particular years
+  under this fold's price history, so `bonds_cash`/`bonds_gold` have
+  no opportunity to differ from `legacy` in them, not because of any
+  deliberate design choice -- leaving an alternative needing
   near-unanimous wins on the remaining 7 folds to clear a strict
-  majority of 12, which is a much harder bar than the rule's wording
-  suggests at a glance.
+  majority of 12, a much harder bar than the rule's wording suggests
+  at a glance.
 
-**For a future re-selection:** restrict folds to 2014-2021 (or
+**For a future re-selection:** restrict folds to 2013-2021 (or
 explicitly exclude any year `cold_start_diagnostic` flags), and add a
 materiality threshold (e.g. require the stability-score margin to
 exceed some multiple of the cross-fold standard deviation), not just a
@@ -204,17 +222,19 @@ sign and a majority count.
 ## 6. V3 (technical view): open question, NOT adopted
 
 V3's IS evidence is the most favourable of anything measured in this
-task (+0.138 mean delta, +0.175 over 2014-2021 alone, the largest
-clean -- non-cold-start-driven -- improvement in Section 4's table).
-**It stays off anyway.** Adopting it now, after looking at this
-specific number, would be exactly the kind of after-the-fact
-cherry-picking this whole project exists to avoid -- the fact that it
-is a *good* number does not make deciding to act on it post-hoc any
-less contaminated than Section 4's keep-current decision. Any future
-test of V3 must be pre-registered with the improved rule from Section
-5 (2014-2021-only folds, a materiality threshold) before any result
-exists, and only the live/forward record from 2026-10-23 onward can
-evaluate it without this problem recurring.
+task (+0.138 mean delta overall, and +0.155 over 2013-2021 alone --
+its real-years performance is actually BETTER than its all-years
+average, the clearest sign among all nine challengers that a result is
+not a cold-start artifact; see Section 4's corrected table). **It
+stays off anyway.** Adopting it now, after looking at this specific
+number, would be exactly the kind of after-the-fact cherry-picking
+this whole project exists to avoid -- the fact that it is a *good*,
+and apparently clean, number does not make deciding to act on it
+post-hoc any less contaminated than Section 4's keep-current decision.
+Any future test of V3 must be pre-registered with the improved rule
+from Section 5 (2013-2021-only folds, a materiality threshold) before
+any result exists, and only the live/forward record from 2026-10-23
+onward can evaluate it without this problem recurring.
 
 ## 7. Phase 4: the single OOS look -- corrected statistics
 
@@ -252,39 +272,56 @@ No pairwise difference clears conventional significance.
 ### Erratum: deflated Sharpe ratio
 
 **The DSR values in the original version of this document were wrong
--- a units bug, not a formula bug.** `metrics.deflated_sharpe_ratio`
-mixed an ANNUALIZED Sharpe ratio (e.g. 0.458) with a PER-OBSERVATION
-`n_obs` (252 weeks), which collapsed `sigma(SR_hat)` to a tiny value
-and made a modest edge look like near-certainty (originally reported:
-~0.985 OOS, ~1.0 full). Fixed in `metrics.py` (`periods_per_year` is
-now a required argument on `deflated_sharpe_ratio`/
+in two separate ways -- a units bug, and a config mix-up (external
+review, Part B1).** First, `metrics.deflated_sharpe_ratio` mixed an
+ANNUALIZED Sharpe ratio (e.g. 0.458) with a PER-OBSERVATION `n_obs`
+(252 weeks), which collapsed `sigma(SR_hat)` to a tiny value and made
+a modest edge look like near-certainty (originally reported: ~0.985
+OOS, ~1.0 full). Fixed in `metrics.py` (`periods_per_year` is now a
+required argument on `deflated_sharpe_ratio`/
 `probabilistic_sharpe_ratio`, so the old call pattern can no longer
-silently mix units -- it raises `TypeError`). Corrected, using WEEKLY
-units (the decision frequency -- the headline; daily is kept only as a
-consistently-computed secondary figure, since daily returns under
-weekly rebalancing are autocorrelated):
+silently mix units -- it raises `TypeError`). Second, and separately,
+the DSR table this document first corrected to (below) was computed
+for `b_phase2` -- the IS-selected, NOT-adopted candidate (Section 4) --
+and then read, here and in README.md, as if it described the
+CURRENT config, which is what is actually live. Both configs' DSR now
+exist, clearly labelled, computed in WEEKLY units (the decision
+frequency -- the headline; daily is kept only as a consistently-
+computed secondary figure, since daily returns under weekly
+rebalancing are autocorrelated):
 
-| Window | DSR, N=170 (as originally reported) | DSR, N=171 (headline, Sec 8) | PSR, no trial correction |
-| --- | --- | --- | --- |
-| OOS 2022-2026 | 0.6235 | **0.6233** | 0.8425 |
-| Full 2014-2026 | 0.7428 | **0.7425** | 0.9624 |
+| Window | Config | DSR, N=170 | DSR, N=171 (headline, Sec 8) | PSR, no trial correction |
+| --- | --- | --- | --- | --- |
+| OOS 2022-2026 | **current (live)** | 0.7192 | **0.7190** | 0.8980 |
+| OOS 2022-2026 | phase2 (not adopted) | 0.6235 | 0.6233 | 0.8425 |
+| Full 2014-2026 | **current (live)** | 0.7791 | **0.7788** | 0.9710 |
+| Full 2014-2026 | phase2 (not adopted) | 0.7428 | 0.7425 | 0.9624 |
 
-(Superseded values, for the record, not deleted: daily-units-mixed
-DSR was 0.9846390529 OOS / 0.9999955191 full -- see `reports/results/
-reselection_phase4_statistics.json`'s `superseded_dsr_units_bug` key
-for the exact old numbers and this same erratum.)
+(Superseded values, for the record, not deleted: `b_phase2`'s
+daily-units-mixed DSR was 0.9846390529 OOS / 0.9999955191 full --
+`a_current` never had an erroneous DSR to supersede, since the
+original table only ever computed one for `b_phase2`. See `reports/
+results/reselection_phase4_statistics.json`'s `superseded_dsr_units_
+bug` key for the exact old numbers and this same erratum.)
 
 **Plain-language reading:** after accounting for ~171 configurations
 this project has effectively compared using OOS data (Section 8), the
-evidence that the strategy's 2022-2026 Sharpe ratio is reliably above
-zero is weak (DSR ~0.62, barely above a coin flip once the multiple-
-comparisons correction is applied) -- not the near-certainty the
-original, buggy number implied. No individual setting examined in
-this task has robust evidence either way once that correction and the
-pre-registered rule's own limits (Section 5) are both accounted for.
-**ATLAS is, on the evidence gathered across this whole task,
-statistically indistinguishable from the Permanent Portfolio across
-every configuration examined.**
+evidence that the CURRENT (live) config's 2022-2026 Sharpe ratio is
+reliably above zero is weak-to-moderate (DSR ~0.72, PSR with no trial
+correction ~0.90) -- not the near-certainty the original, buggy number
+implied, but also not as weak as citing `phase2`'s ~0.62 in its place
+made it look. `phase2` itself (the IS-selected, not-adopted candidate)
+scores lower on every version of this table, which is additional,
+independent support for Section 4's keep-current decision: the
+IS-selected candidate doesn't just lose IS to the cold-start effect,
+it is also the weaker of the two on this OOS-contaminated statistic.
+Neither number is strong evidence by any conventional standard, and
+the multiple-comparisons correction is doing real work either way.
+**ATLAS is, on the evidence gathered across this whole task, not
+clearly distinguishable from the Permanent Portfolio** (Section 7's
+paired tests above: no pairwise difference clears conventional
+significance) **-- "not clearly worse" is a more honest summary than
+either config's DSR number in isolation would suggest.**
 
 ## 8. What is clean
 

@@ -419,8 +419,11 @@ def test_save_checkpoint_raises_after_exhausting_retries(
 # backtest involved.
 # --------------------------------------------------------------------- #
 def test_fold_delta_diagnostic_known_counts_and_means():
-    # 2010-2013 (cold start): challenger wins all 4, by +1.0 each.
-    # 2014-2021 (warm): challenger wins 2, loses 5, ties 1.
+    # 2010-2012 (cold start): challenger wins all 3, by +1.0 each.
+    # 2013-2021 (warm, external review Part B3 -- 2013 already has a
+    # full covariance window per cold_start_diagnostic, so it belongs
+    # here, not with 2010-2012): challenger wins 3 (incl. 2013), loses
+    # 5, ties 1.
     current = pd.Series(
         {
             2010: 0.0, 2011: 0.0, 2012: 0.0, 2013: 0.0,
@@ -430,7 +433,7 @@ def test_fold_delta_diagnostic_known_counts_and_means():
     )
     challenger = pd.Series(
         {
-            2010: 1.0, 2011: 1.0, 2012: 1.0, 2013: 1.0,
+            2010: 1.0, 2011: 1.0, 2012: 1.0, 2013: 1.0,  # 2013 wins too
             2014: 0.6, 2015: 0.7,  # 2 wins
             2016: 0.4, 2017: 0.3, 2018: 0.2, 2019: 0.1, 2020: 0.0,  # 5 losses
             2021: 0.5,  # 1 tie
@@ -441,19 +444,20 @@ def test_fold_delta_diagnostic_known_counts_and_means():
     expected_deltas = (challenger - current).to_numpy()
 
     assert result["n_folds_all"] == 12
-    assert result["wins_all"] == 4 + 2
+    assert result["wins_all"] == 3 + 1 + 2
     assert result["losses_all"] == 5
     assert result["ties_all"] == 1
     assert result["mean_delta_all"] == pytest.approx(expected_deltas.mean())
 
-    assert result["n_folds_2010_2013"] == 4
-    assert result["wins_2010_2013"] == 4
-    assert result["mean_delta_2010_2013"] == pytest.approx(1.0)
+    assert result["n_folds_2010_2012"] == 3
+    assert result["wins_2010_2012"] == 3
+    assert result["mean_delta_2010_2012"] == pytest.approx(1.0)
 
-    assert result["n_folds_2014_2021"] == 8
-    assert result["wins_2014_2021"] == 2
-    assert result["losses_2014_2021"] == 5
-    assert result["ties_2014_2021"] == 1
+    assert result["n_folds_2013_2021"] == 9
+    assert result["wins_2013_2021"] == 3  # 2013 + 2014 + 2015
+    assert result["losses_2013_2021"] == 5
+    assert result["ties_2013_2021"] == 1
+    assert result["mean_delta_2013_2021"] == pytest.approx(-0.2 / 9)
 
 
 def test_fold_delta_diagnostic_tie_tolerance_not_exact_zero():

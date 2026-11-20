@@ -214,19 +214,25 @@ unplanned change, not a substitute for that decision.
 
 ## Results
 
-> **Contamination notice (2026-11-01).** The 2022-2026 OOS window
-> below has been looked at, directly or indirectly, by roughly 171
-> configuration choices across this project's history (module
-> ablations, turnover/gate sensitivity, and a dedicated IS-vs-OOS
-> re-selection task) -- it is a development set, not a held-out test,
-> and no Sharpe comparison on it should be read as a confident
-> ranking. The corrected deflated Sharpe ratio for the current
-> config's OOS excess Sharpe is **~0.62** (previously misreported as
-> ~0.98 due to a units bug), meaning the evidence that it is reliably
-> above zero is weak. Full detail, corrected statistics, and the
-> re-selection outcome: **`docs/RESELECTION.md`**. **The only clean
-> record is the live book from 2026-10-23 onward** -- nothing before
-> that date has informed any decision in this project.
+> **Contamination notice (2026-11-01, corrected 2026-11-20).** The
+> 2022-2026 OOS window below has been looked at, directly or
+> indirectly, by roughly 171 configuration choices across this
+> project's history (module ablations, turnover/gate sensitivity, and
+> a dedicated IS-vs-OOS re-selection task) -- it is a development set,
+> not a held-out test, and no Sharpe comparison on it should be read
+> as a confident ranking. The corrected deflated Sharpe ratio for the
+> CURRENT (live) config's OOS excess Sharpe is **~0.72** (PSR with no
+> trial correction ~0.90) -- previously misreported here as ~0.62,
+> which was actually `phase2`'s value (the IS-selected, not-adopted
+> candidate from `docs/RESELECTION.md`'s re-selection task), not the
+> current config's; both were separately misreported as ~0.98 before
+> that, due to a units bug. Full detail, both configs' corrected
+> statistics, and the re-selection outcome: **`docs/RESELECTION.md`**.
+> **The only clean record is the live book from 2026-10-23 onward**:
+> no data from after that date has been used to choose any setting in
+> this project, which is exactly why the live record from that date on
+> is the one number here that isn't a product of looking at the thing
+> it's trying to measure.
 
 **Re-selection outcome, in one paragraph:** a leakage audit found that
 four of this project's config choices (V3/V5 on/off, turnover cap,

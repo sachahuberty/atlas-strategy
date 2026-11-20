@@ -8,7 +8,13 @@
         "max_drawdown": -0.15893217540314175,
         "years": 4.818617385352498,
         "n_days": 1211,
-        "sharpe_se": 0.49226775186363275
+        "sharpe_se": 0.49226775186363275,
+        "n_weeks": 252,
+        "deflated_sharpe_ratio_weekly_n170": 0.7191774944552306,
+        "deflated_sharpe_ratio_daily_n170_secondary": 0.7189126628510334,
+        "deflated_sharpe_ratio_weekly_n171": 0.7190104036352613,
+        "deflated_sharpe_ratio_daily_n171_secondary": 0.7187457221802276,
+        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.8980060030448451
       },
       "b_phase2": {
         "ann_return": 0.08131706819964424,
@@ -23,12 +29,7 @@
         "deflated_sharpe_ratio_daily_n170_secondary": 0.6232577101506571,
         "deflated_sharpe_ratio_weekly_n171": 0.6232881275201939,
         "deflated_sharpe_ratio_daily_n171_secondary": 0.6230697254086914,
-        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.8425302797473062,
-        "superseded_dsr_units_bug": {
-          "deflated_sharpe_ratio_daily_n_obs": 0.9999989521273793,
-          "deflated_sharpe_ratio_weekly_n_obs": 0.9846390528758169,
-          "erratum": "These values mixed an ANNUALIZED Sharpe ratio with a PER-OBSERVATION n_obs (a units bug, not a formula bug) -- superseded by the periods_per_year-aware values above. See docs/RESELECTION.md Step 1 erratum."
-        }
+        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.8425302797473062
       },
       "c_permanent": {
         "ann_return": 0.09416489988071208,
@@ -64,7 +65,13 @@
         "max_drawdown": -0.23153038020222916,
         "years": 12.821355236139631,
         "n_days": 3226,
-        "sharpe_se": 0.2981900221198273
+        "sharpe_se": 0.2981900221198273,
+        "n_weeks": 670,
+        "deflated_sharpe_ratio_weekly_n170": 0.779089692624755,
+        "deflated_sharpe_ratio_daily_n170_secondary": 0.77873058827473,
+        "deflated_sharpe_ratio_weekly_n171": 0.7788494155490476,
+        "deflated_sharpe_ratio_daily_n171_secondary": 0.7784904661756813,
+        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.9709998640896317
       },
       "b_phase2": {
         "ann_return": 0.05940346751943437,
@@ -79,12 +86,7 @@
         "deflated_sharpe_ratio_daily_n170_secondary": 0.7424109242072098,
         "deflated_sharpe_ratio_weekly_n171": 0.7425073646001944,
         "deflated_sharpe_ratio_daily_n171_secondary": 0.7421500049391586,
-        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.9623521744880296,
-        "superseded_dsr_units_bug": {
-          "deflated_sharpe_ratio_daily_n_obs": 1.0,
-          "deflated_sharpe_ratio_weekly_n_obs": 0.9999955190777309,
-          "erratum": "These values mixed an ANNUALIZED Sharpe ratio with a PER-OBSERVATION n_obs (a units bug, not a formula bug) -- superseded by the periods_per_year-aware values above. See docs/RESELECTION.md Step 1 erratum."
-        }
+        "probabilistic_sharpe_ratio_weekly_no_trial_correction": 0.9623521744880296
       },
       "c_permanent": {
         "ann_return": 0.05944818073792546,

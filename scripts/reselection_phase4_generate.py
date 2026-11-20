@@ -11,24 +11,49 @@ pre-registration rules out.
 
 Committed AS-IS (external review, following a correction task) for
 reproducibility/audit: this is what actually produced the committed
-daily-return pickle, not a cleaned-up or path-genericized rewrite.
-That means it still has the absolute, machine-specific path below
-and the informal elapsed-time prints (later found to be unreliable in
-this sandboxed environment, per this project's own session notes) --
+daily-return pickle, not a cleaned-up rewrite. That means it still has
+the informal elapsed-time prints (later found to be unreliable in this
+sandboxed environment, per this project's own session notes) --
 preserved deliberately rather than tidied, since the point of
 committing it is historical fidelity to what ran, not a reusable
 library module. Do not import from this file; do not execute it.
 Reusable analysis of its OUTPUT lives in
 `scripts/reselection_phase4_stats.py`, which reads only the already-
 committed pickle.
+
+**Two, and only two, deliberate changes (external review Part B5),
+both documented here rather than silently made:** (1) a hard guard
+right below, before any other import, that refuses to run at all
+unless `ATLAS_ALLOW_OOS_REGENERATION=1` is set -- a second OOS look,
+even an identical one, is exactly what the pre-registration rules out,
+so this should never run by accident. (2) the absolute, machine-
+specific Windows path this script originally hardcoded is now derived
+from `__file__`, so the guard above is the only thing standing between
+an accidental run and a second OOS look, not a path that happens not
+to resolve on a different machine. Everything else -- including the
+unreliable elapsed-time prints -- is exactly what ran on 2026-11-01.
 """
+import os
+
+if os.environ.get("ATLAS_ALLOW_OOS_REGENERATION") != "1":
+    raise RuntimeError(
+        "This script re-runs Phase 4's single OOS look over 2022-2026 "
+        "data. docs/RESELECTION_PREREG.md commits this task to exactly "
+        "one such look, already taken and committed (reports/results/"
+        "reselection_phase4_daily_returns.pkl) -- running this again, "
+        "even identically, would be a second look, which the "
+        "pre-registration rules out. Set "
+        "ATLAS_ALLOW_OOS_REGENERATION=1 only if you have a specific, "
+        "deliberate reason to accept that cost."
+    )
+
 import copy
 import pickle
 import sys
 import time
 from pathlib import Path
 
-ROOT = Path(r"c:/Users/sacha/OneDrive/IE/Master in Business Analytics and Data Science/Term 3/Algo Trading/atlas-strategy")
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import pandas as pd
