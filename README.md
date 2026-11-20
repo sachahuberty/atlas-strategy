@@ -134,6 +134,43 @@ the prior week's executed one-way turnover times
 Context chart plots the net series, labelled "net of 10 bp transaction
 costs"; the gross column is kept in the CSV for anyone who wants it.
 
+**Implementation fix (2026-11-20): the anomaly override now persists
+across runs.** `strategy.with_anomaly_override` cached its fitted
+autoencoder in-process, but every GitHub Actions run is a fresh
+process, so weeks **2026-10-30 through 2026-11-13** each refit the
+autoencoder from scratch instead of following
+`anomaly.refit_frequency_days` the way the backtest does. Fixed by
+`anomaly_store.AnomalyModelStore`, which persists the fitted model to
+`live/models/anomaly/` (committed, same spirit as `state.json`) and is
+anchored at the live start (`fitted_at = 2026-10-23`, next refit due
+2027-02-26). The counterfactual check (`reports/results/
+live_anomaly_counterfactual.csv`): with the correctly-persisted model,
+2026-11-06's override would **not** have fired (recon 2.11 vs.
+threshold 5.31) -- that week's turnover-cap-binding event toward GMV
+was an artifact of the weekly-refit bug, not a genuine signal. This is
+an implementation-fidelity fix, not a strategy change: the override's
+design (blend fully to GMV under the turnover cap when flagged) is
+unchanged, and the live record is **not** restarted -- the weeks
+above stay on the record exactly as they ran, per this project's
+standing discipline of keeping every measured result, not deleting
+pre-fix weeks (see "Live record restart" below for how that discipline
+has already been applied once, to an earlier, unrelated bug).
+
+**Known limitation: the anomaly override is still bound by the 2%
+weekly turnover cap.** "Blend fully to GMV" (`anomaly.blend_to_gmv:
+1.0`) describes the *target* when flagged, not what gets traded that
+week -- the trade is sized by the same `rebalance.max_weekly_turnover`
+every other decision is, so reaching a fully defensive book from a
+typical starting point takes on the order of 35+ weeks of the override
+staying flagged continuously. This almost certainly explains why the
+override's own measured marginal OOS contribution has been close to
+zero in every ablation (notebook 11, ANALYSIS_V2.md Step 2): it can
+rarely move the book far enough, fast enough, to matter. Making the
+override cap-exempt, or switching it off, would both be strategy
+changes, not implementation fixes -- either needs its own
+pre-registered IS-only test (same discipline as `docs/RESELECTION.md`)
+and, if adopted, a live record restart, so neither is made here.
+
 **Live record restart takes effect with the first corrected run
 (expected: the Monday 2026-10-26 14:00 UTC catch-up cron, deciding
 2026-10-23), not 2026-10-21 as originally planned.** Two pre-fix weeks
