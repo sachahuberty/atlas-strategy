@@ -60,6 +60,7 @@ import pandas as pd
 
 from . import (
     allocation,
+    anomaly_store as anomaly_store_mod,
     backtest,
     data,
     meanreversion,
@@ -71,6 +72,7 @@ from . import (
 PROJECT_ROOT = data.PROJECT_ROOT
 LIVE_DIR = PROJECT_ROOT / "live"
 POSTURE_CONFIG_PATH = PROJECT_ROOT / "config" / "regime_posture.yaml"
+ANOMALY_STORE_DIR = LIVE_DIR / "models" / "anomaly"
 
 STATUS_OK = "ok"
 STATUS_HELD = "held"
@@ -364,6 +366,8 @@ def build_strategy(
     meanrev_eligible: pd.Index,
     bl_record=None,
     anomaly_record=None,
+    anomaly_model_store=None,
+    anomaly_on_refit=None,
 ) -> strategy.StrategyFn:
     """Construct the weekly decision function exactly as notebook 09's
     frozen OOS run does: `black_litterman_strategy`, wrapped with
@@ -375,6 +379,12 @@ def build_strategy(
     must avoid TensorFlow) yields the bare, deterministic BL strategy --
     which is exactly what makes the backtest replay-parity test possible
     without a GPU.
+
+    `anomaly_model_store`/`anomaly_on_refit` (external review, Part A)
+    are threaded straight through to `with_anomaly_override`'s
+    `model_store`/`on_refit`. Both default to None, so a caller that
+    doesn't pass them (every existing test, every notebook) gets the
+    exact same in-process-only cache as before.
     """
     bl_fn = strategy.black_litterman_strategy(
         class_bucket,
@@ -386,7 +396,11 @@ def build_strategy(
     )
     if cfg["modules"].get("anomaly_override", False):
         return strategy.with_anomaly_override(
-            bl_fn, cfg, record=anomaly_record
+            bl_fn,
+            cfg,
+            record=anomaly_record,
+            model_store=anomaly_model_store,
+            on_refit=anomaly_on_refit,
         )
     return bl_fn
 
@@ -405,6 +419,7 @@ def run_once(
     cfg: dict | None = None,
     dry_run: bool = False,
     state_path: str | Path | None = None,
+    anomaly_store_dir: str | Path | None = None,
 ) -> RunResult:
     """Produce one week's allocation.
 
@@ -474,7 +489,7 @@ def run_once(
 
         return _decide(
             current_state, market, cfg, posture_cfg, resolved_as_of,
-            dry_run, state_path, run_utc,
+            dry_run, state_path, run_utc, anomaly_store_dir,
         )
     except HeldError as exc:
         return _empty_result(STATUS_HELD, resolved_as_of, [str(exc)], run_utc)
@@ -493,6 +508,7 @@ def _decide(
     dry_run: bool,
     state_path,
     run_utc: pd.Timestamp,
+    anomaly_store_dir: str | Path | None = None,
 ) -> RunResult:
     """Reconcile -> decide -> size -> persist. Returns a STATUS_OK
     result. Raises only on genuinely unexpected errors (handled by the
@@ -580,11 +596,32 @@ def _decide(
     # 2. Decide: call the SAME strategy the backtest calls, once.
     bl_diag: dict = {}
     anomaly_diag: dict = {}
+    # The anomaly model store/refit-sink (external review, Part A): the
+    # store's `.load` happens inside `with_anomaly_override` when the
+    # strategy is built below, so a refit this call persists to disk
+    # only if this run reaches the "ok, not dry_run" persist block
+    # further down -- a held/failed run must never write a model that
+    # a rolled-back `state.json` doesn't agree with.
+    anomaly_store = anomaly_store_mod.AnomalyModelStore(
+        anomaly_store_dir
+        if anomaly_store_dir is not None
+        else anomaly_store_mod.DEFAULT_STORE_DIR
+    )
+    refit_sink: dict = {"result": None, "fitted_at": None}
+    anomaly_on = cfg["modules"].get("anomaly_override", False)
     strat = build_strategy(
         cfg, posture_cfg, market.class_bucket, market.rf_series,
         compute_meanrev_eligible(market.prices, cfg),
         bl_record=bl_diag.update,
         anomaly_record=anomaly_diag.update,
+        anomaly_model_store=anomaly_store if anomaly_on else None,
+        anomaly_on_refit=(
+            (lambda result, fitted_at: refit_sink.update(
+                result=result, fitted_at=fitted_at
+            ))
+            if anomaly_on
+            else None
+        ),
     )
     window = market.returns.loc[:as_of]
     raw_target = strat(as_of, window)
@@ -699,6 +736,30 @@ def _decide(
             "excess_return_prior", True
         )
         new_state["config_hash"] = diagnostics["config_hash"]
+        # Persist a refit anomaly model now, at the same transactional
+        # boundary as state.json itself (external review, Part A): if
+        # this run had refit (refit_sink populated), commit it to disk
+        # only here, after everything else about this run has already
+        # succeeded -- never inside the strategy call itself, where a
+        # later failure in this function would otherwise leave a model
+        # on disk that this week's (never-written) state doesn't agree
+        # with.
+        if refit_sink["result"] is not None:
+            anomaly_store.save(
+                refit_sink["result"], refit_sink["fitted_at"], cfg
+            )
+        if anomaly_diag.get("fitted_at") is not None:
+            new_state["anomaly_fitted_at"] = anomaly_diag["fitted_at"]
+            resolved_model_path = anomaly_store.model_path.resolve()
+            try:
+                new_state["anomaly_model_path"] = str(
+                    resolved_model_path.relative_to(PROJECT_ROOT)
+                )
+            except ValueError:
+                # Store directory outside the repo (e.g. a test's
+                # tmp_path): record the absolute path rather than fail
+                # a run over a purely cosmetic path-shortening step.
+                new_state["anomaly_model_path"] = str(resolved_model_path)
         state_mod.save_state(new_state, state_path)
 
     return RunResult(

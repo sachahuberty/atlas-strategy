@@ -41,7 +41,8 @@ this module has grown large enough that the live path was hard to
 find. Stages 4 and 7 stayed here: both are still live, not superseded.
 
 Public API (stage 4):
-    with_anomaly_override(strategy_fn, cfg) -> strategy_fn
+    with_anomaly_override(strategy_fn, cfg, record=None,
+                           model_store=None, on_refit=None) -> strategy_fn
 
 Public API (stage 7):
     with_sentiment_view(strategy_fn, cfg, class_bucket,
@@ -93,6 +94,9 @@ def with_anomaly_override(
     strategy_fn: StrategyFn,
     cfg: dict,
     record: Callable[[dict], None] | None = None,
+    model_store=None,
+    on_refit: Callable[["anomaly.AutoencoderResult", pd.Timestamp], None]
+    | None = None,
 ) -> StrategyFn:
     """Wrap any strategy_fn with the anomaly risk override (L4, S8):
     if the autoencoder flags the current window as anomalous, blend
@@ -100,15 +104,36 @@ def with_anomaly_override(
     `anomaly.blend_to_gmv` (1.0 = fully defensive).
 
     The autoencoder is refit every `anomaly.refit_frequency_days` and
-    cached in between -- a lightweight stand-in for the fold-based
-    walk-forward refit stage 9 will formalize with real per-fold
-    persistence in models/.
+    cached in between -- the in-process cache below is exactly what
+    the backtest and ablation studies have always relied on across a
+    single long-lived walk-forward loop.
 
     `record`, if given, is called once per invocation with a JSON-
     serializable dict describing the override decision (reconstruction
-    error vs threshold, whether it fired, the blend applied) for the
-    live runner's diagnostics sink. Default None leaves every existing
-    caller (backtest, ablation) untouched.
+    error vs threshold, whether it fired, the blend applied, and now
+    `anomaly_model_source` / `refit_reason`) for the live runner's
+    diagnostics sink.
+
+    `model_store` and `on_refit` (external review, Part A) are what
+    let the live runner survive across process restarts, where this
+    closure's cache would otherwise be rebuilt from nothing every run:
+    - `model_store`, if given, is asked once (via `.load(cfg)`) to seed
+      the cache from whatever was last persisted, instead of starting
+      with an empty cache. A missing/corrupt store, or one fitted
+      under a different anomaly config, is reported via the loaded
+      `reason` (never silently ignored) and simply means this call
+      refits from scratch, exactly as every call already did before
+      this parameter existed.
+    - `on_refit`, if given, is called with `(result, as_of)` every time
+      a fit actually happens, so the caller can persist it -- e.g. the
+      live runner defers the actual disk write to its own `state.json`-
+      style commit point, so a held/failed run leaves the store
+      untouched even though a fit occurred in memory this call.
+
+    Both default to None, which keeps every existing caller (backtest,
+    ablation, and every test written before this parameter existed)
+    byte-identical: no load attempt, no save call, same in-process
+    cache as always.
     """
     acfg = cfg["optimization"]
     cov_method = acfg["covariance"]
@@ -117,6 +142,14 @@ def with_anomaly_override(
     refit_every = cfg["anomaly"]["refit_frequency_days"]
 
     cache: dict = {"result": None, "fitted_at": None}
+    load_reason: str | None = None
+    if model_store is not None:
+        loaded = model_store.load(cfg)
+        if loaded.reason is None:
+            cache["result"] = loaded.result
+            cache["fitted_at"] = loaded.fitted_at
+        else:
+            load_reason = loaded.reason
 
     def _emit(diag: dict) -> None:
         if record is not None:
@@ -132,14 +165,23 @@ def with_anomaly_override(
             _emit({"active": False, "reason": "insufficient_history"})
             return base_weights
 
+        had_cached_model = cache["fitted_at"] is not None
         stale = (
             cache["fitted_at"] is None
             or (as_of - cache["fitted_at"]).days >= refit_every
         )
+        model_source = "loaded" if not stale else "refit"
+        refit_reason = None
         if stale:
+            if had_cached_model:
+                refit_reason = "refit_due"
+            else:
+                refit_reason = load_reason or "no_stored_model"
             try:
                 cache["result"] = anomaly.fit_autoencoder(features, cfg)
                 cache["fitted_at"] = as_of
+                if on_refit is not None:
+                    on_refit(cache["result"], as_of)
             except (ValueError, tf.errors.InvalidArgumentError):
                 # Same spirit as regimes.py's HMM guard: a degenerate
                 # fit on one week's window shouldn't crash the whole
@@ -164,6 +206,8 @@ def with_anomaly_override(
                     "recon_error": latest_error,
                     "threshold": float(result.threshold),
                     "fitted_at": cache["fitted_at"].isoformat(),
+                    "anomaly_model_source": model_source,
+                    "refit_reason": refit_reason,
                 }
             )
             return base_weights
@@ -180,6 +224,8 @@ def with_anomaly_override(
                 "threshold": float(result.threshold),
                 "blend_to_gmv": float(blend),
                 "fitted_at": cache["fitted_at"].isoformat(),
+                "anomaly_model_source": model_source,
+                "refit_reason": refit_reason,
             }
         )
         return (1 - blend) * aligned_base + blend * gmv_weights

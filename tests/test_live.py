@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from atlas import backtest, data, live, state as state_mod, strategy
+from atlas import anomaly, backtest, data, live, state as state_mod, strategy
 
 
 # --------------------------------------------------------------------- #
@@ -1041,3 +1041,163 @@ def test_initialized_state_with_no_stored_hash_no_warning(
     res = live.run_once(as_of=as_of, cfg=data.load_config(), state_path=sp)
     assert res.status == live.STATUS_OK
     assert res.diagnostics["config_changed"] is False
+
+
+# --------------------------------------------------------------------- #
+# Anomaly override persistence parity (external review, Part A5): the
+# live path, simulated as a sequence of SEPARATE processes (a fresh
+# `build_strategy` call each week, a model store that is the only
+# thing carried between them, exactly like state.json), must produce
+# the SAME targets as the backtest's single long-lived in-process
+# cache, across a refit boundary and a week where the override fires.
+# --------------------------------------------------------------------- #
+def _anomaly_parity_cfg():
+    cfg = copy.deepcopy(data.load_config())
+    cfg["regimes"]["market_ticker"] = "EQ1"
+    cfg["regimes"]["hmm"]["n_states"] = 2
+    cfg["regimes"]["hmm"]["lookback_days"] = 120
+    cfg["regimes"]["hmm"]["vol_window_days"] = 5
+    cfg["optimization"]["lookback_days"] = 120
+    cfg["meanreversion"]["lookback_days"] = 20
+    cfg["meanreversion"]["adf_lookback_days"] = 40
+    cfg["general"]["is_end_date"] = "2021-12-31"
+    cfg["modules"]["anomaly_override"] = True
+    # Tiny/fast: a handful of epochs is enough to prove PERSISTENCE
+    # parity (same weights loaded vs. refit), not model quality.
+    cfg["anomaly"]["hidden_units"] = 4
+    cfg["anomaly"]["epochs"] = 3
+    cfg["anomaly"]["patience"] = 1
+    cfg["anomaly"]["batch_size"] = 16
+    # Small enough that two consecutive weekly runs (7 calendar days
+    # apart) straddle a refit boundary within a handful of weeks.
+    cfg["anomaly"]["refit_frequency_days"] = 10
+    return cfg
+
+
+def _anomaly_parity_market(cfg, seed=7, n=160):
+    """Same shape as `_real_market`, but with an injected return burst
+    positioned to land in exactly one week's trailing
+    `anomaly.sequence_length`-day scoring window -- late enough that
+    the autoencoder fit just before it never saw it (so its threshold
+    stays calibrated on calm data), which is what makes that one week
+    fire while neighbouring weeks, fit on calmer or later windows, do
+    not."""
+    rng = np.random.default_rng(seed)
+    tickers = ["EQ1", "EQ2", "FI1", "FI2", "CO1", "CO2", "CA1"]
+    buckets = {
+        "EQ1": "equity", "EQ2": "equity",
+        "FI1": "fixed_income", "FI2": "fixed_income",
+        "CO1": "commodity", "CO2": "commodity",
+        "CA1": "cash",
+    }
+    dates = pd.bdate_range("2021-06-01", periods=n)
+    vol = {
+        "equity": 0.012, "fixed_income": 0.004,
+        "commodity": 0.014, "cash": 0.0005,
+    }
+    mu = {
+        "equity": 0.0004, "fixed_income": 0.0001,
+        "commodity": 0.0003, "cash": 8e-5,
+    }
+    rets = {}
+    for t in tickers:
+        b = buckets[t]
+        rets[t] = rng.normal(mu[b], vol[b], len(dates))
+    # Injected burst: the 5 trading days 2021-07-26..2021-07-30
+    # (strictly after the first anomaly-active week-end 2021-07-23,
+    # on/before the next one 2021-07-30) -- see the dynamic week0
+    # lookup in the test itself for why these specific dates matter.
+    burst = (dates >= pd.Timestamp("2021-07-26")) & (
+        dates <= pd.Timestamp("2021-07-30")
+    )
+    rets["EQ1"][burst] *= 25.0
+    cols = {t: 100 * np.cumprod(1 + rets[t]) for t in tickers}
+    prices = data.align_calendars(pd.DataFrame(cols, index=dates))
+    returns = data.daily_returns(prices)
+    return live.MarketData(
+        returns=returns,
+        prices=prices,
+        rf_series=pd.Series(0.04, index=returns.index),
+        rf_true_last_date=returns.index.max(),
+        class_bucket=pd.Series(buckets),
+        tickers=tickers,
+        last_price_date=prices.index.max(),
+    )
+
+
+def test_anomaly_override_live_persistence_matches_backtest(
+    tmp_path, monkeypatch
+):
+    cfg = _anomaly_parity_cfg()
+    market = _anomaly_parity_market(cfg)
+    posture_cfg = live._load_posture_cfg(cfg)
+    meanrev = live.compute_meanrev_eligible(market.prices, cfg)
+    week_ends = sorted(backtest.week_end_dates(market.returns.index))
+
+    # week0: the first week-end where the override's own history floor
+    # is met -- both the backtest's single cache and the live
+    # simulation's model store do their very first fit here, so their
+    # refit schedules are anchored identically from this point on.
+    week0_idx = next(
+        i for i, d in enumerate(week_ends)
+        if anomaly.has_enough_history(
+            anomaly.build_features(market.returns.loc[:d]), cfg
+        )
+    )
+    weeks = week_ends[week0_idx : week0_idx + 4]
+    assert len(weeks) == 4, "synthetic history too short for 4 test weeks"
+
+    # --- Reference: one long-lived in-process cache, exactly what the
+    # backtest and every ablation study have always used. ---
+    bl_fn = strategy.black_litterman_strategy(
+        market.class_bucket, cfg, posture_cfg,
+        rf_series=market.rf_series, meanrev_eligible=meanrev,
+    )
+    wrapped_for_bt = strategy.with_anomaly_override(bl_fn, cfg)
+    recorded = {}
+
+    def recorder(d, w):
+        out = wrapped_for_bt(d, w)
+        recorded[d] = out
+        return out
+
+    backtest.run(recorder, market.returns, cfg)
+    for d in weeks:
+        assert d in recorded, f"{d} was not a rebalance date"
+
+    # --- Live: one fresh `build_strategy` per week (separate
+    # processes), with only a shared model-store directory and
+    # state.json carried between them -- the actual bug being fixed. ---
+    monkeypatch.setattr(live, "fetch_data", lambda _cfg: market)
+    state_path = tmp_path / "state.json"
+    store_dir = tmp_path / "anomaly"
+    anomaly_sources = []
+    for d in weeks:
+        res = live.run_once(
+            as_of=d, cfg=cfg, dry_run=False,
+            state_path=state_path, anomaly_store_dir=store_dir,
+        )
+        assert res.status == live.STATUS_OK
+        ref_target = recorded[d].reindex(res.target_weights.index).fillna(
+            0.0
+        )
+        pd.testing.assert_series_equal(
+            res.target_weights.sort_index(),
+            ref_target.sort_index(),
+            atol=1e-6,
+            check_names=False,
+        )
+        anomaly_sources.append(
+            (
+                d.date(),
+                res.diagnostics["anomaly"].get("anomaly_model_source"),
+                res.diagnostics["anomaly"].get("fired"),
+            )
+        )
+
+    sources = [s for _, s, _fired in anomaly_sources]
+    fired = [f for _, _s, f in anomaly_sources]
+    assert sources[0] == "refit"  # week0: nothing stored yet
+    assert "loaded" in sources[1:], anomaly_sources  # a load actually happened
+    assert "refit" in sources[1:], anomaly_sources  # ...and a later refit
+    assert any(fired), anomaly_sources  # the injected burst fired at least once

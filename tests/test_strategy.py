@@ -6,6 +6,7 @@ alongside strategy_legacy.py (S11 Step 5, ANALYSIS_V2.md action 6).
 """
 
 import copy
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -195,6 +196,170 @@ def test_anomaly_override_passes_through_with_too_little_history():
     weights = wrapped(returns.index[-1], returns)
 
     pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+# --- stage 4 (external review, Part A): model_store / on_refit -------
+
+class _FakeStore:
+    def __init__(self, load_result):
+        self._load_result = load_result
+
+    def load(self, cfg):
+        return self._load_result
+
+
+def test_anomaly_override_seeds_cache_from_model_store_and_skips_refit(
+    monkeypatch,
+):
+    call_count = {"n": 0}
+
+    def _fake_fit(features, cfg):
+        call_count["n"] += 1
+        return _DummyAEResult()
+
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(anomaly, "fit_autoencoder", _fake_fit)
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    returns = _synthetic_returns()
+    as_of = returns.index[-1]
+    store = _FakeStore(
+        SimpleNamespace(
+            result=_DummyAEResult(), fitted_at=as_of - pd.Timedelta(days=1),
+            reason=None,
+        )
+    )
+    wrapped = strategy.with_anomaly_override(
+        _base_fn, ANOMALY_CFG, model_store=store
+    )
+    weights = wrapped(as_of, returns)
+
+    assert call_count["n"] == 0  # loaded, never refit
+    pd.testing.assert_series_equal(weights, _base_fn(None, None))
+
+
+def test_anomaly_override_calls_on_refit_when_a_fit_happens(monkeypatch):
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(
+        anomaly, "fit_autoencoder", lambda *a, **k: _DummyAEResult()
+    )
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    refit_calls = []
+    returns = _synthetic_returns()
+    as_of = returns.index[-1]
+    wrapped = strategy.with_anomaly_override(
+        _base_fn, ANOMALY_CFG,
+        on_refit=lambda result, fitted_at: refit_calls.append(
+            (result, fitted_at)
+        ),
+    )
+    wrapped(as_of, returns)
+
+    assert len(refit_calls) == 1
+    assert refit_calls[0][1] == as_of
+
+
+def test_anomaly_override_does_not_call_on_refit_when_loaded_from_store(
+    monkeypatch,
+):
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(
+        anomaly, "fit_autoencoder", lambda *a, **k: _DummyAEResult()
+    )
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    refit_calls = []
+    returns = _synthetic_returns()
+    as_of = returns.index[-1]
+    store = _FakeStore(
+        SimpleNamespace(
+            result=_DummyAEResult(), fitted_at=as_of - pd.Timedelta(days=1),
+            reason=None,
+        )
+    )
+    wrapped = strategy.with_anomaly_override(
+        _base_fn, ANOMALY_CFG, model_store=store,
+        on_refit=lambda result, fitted_at: refit_calls.append(
+            (result, fitted_at)
+        ),
+    )
+    wrapped(as_of, returns)
+
+    assert refit_calls == []
+
+
+def test_anomaly_override_surfaces_load_failure_reason_in_diagnostics(
+    monkeypatch,
+):
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(
+        anomaly, "fit_autoencoder", lambda *a, **k: _DummyAEResult()
+    )
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    diagnostics = []
+    returns = _synthetic_returns()
+    as_of = returns.index[-1]
+    store = _FakeStore(
+        SimpleNamespace(result=None, fitted_at=None, reason="missing")
+    )
+    wrapped = strategy.with_anomaly_override(
+        _base_fn, ANOMALY_CFG, record=diagnostics.append, model_store=store,
+    )
+    wrapped(as_of, returns)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["anomaly_model_source"] == "refit"
+    assert diagnostics[0]["refit_reason"] == "missing"
+
+
+def test_anomaly_override_default_none_params_unchanged_behaviour(
+    monkeypatch,
+):
+    """model_store=None, on_refit=None (the default for every existing
+    caller) must behave exactly as before these params existed."""
+    monkeypatch.setattr(anomaly, "has_enough_history", lambda *a, **k: True)
+    monkeypatch.setattr(
+        anomaly, "fit_autoencoder", lambda *a, **k: _DummyAEResult()
+    )
+    monkeypatch.setattr(
+        anomaly, "reconstruction_error", lambda *a, **k: np.array([0.1])
+    )
+    monkeypatch.setattr(
+        anomaly, "is_anomalous", lambda errors, threshold: np.array([False])
+    )
+
+    returns = _synthetic_returns()
+    wrapped_old_style = strategy.with_anomaly_override(_base_fn, ANOMALY_CFG)
+    wrapped_explicit_none = strategy.with_anomaly_override(
+        _base_fn, ANOMALY_CFG, model_store=None, on_refit=None
+    )
+    as_of = returns.index[-1]
+    pd.testing.assert_series_equal(
+        wrapped_old_style(as_of, returns),
+        wrapped_explicit_none(as_of, returns),
+    )
 
 
 # --- stage 7: sentiment (V4) tilt -------------------------------------
